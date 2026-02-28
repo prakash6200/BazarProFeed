@@ -1,0 +1,6 @@
+.env
+*.log
+.DS_Store
+/bin
+REQUIREMENTS.md
+.git_locked_backup_*
