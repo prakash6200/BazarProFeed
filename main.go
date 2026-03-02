@@ -9,7 +9,6 @@ import (
 	"feedprovider/config"
 	"feedprovider/services"
 
-	ws "github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -23,6 +22,8 @@ func main() {
 	zerodhaFeedService := services.NewZerodhaFeedService(config.App.Zerodha, tickHub)
 	zerodhaFeedService.Start(ctx)
 
+	socketHub := config.NewSocketHub()
+
 	defer func() {
 		if err := config.CloseDatabase(); err != nil {
 			log.Printf("failed to close database: %v", err)
@@ -30,24 +31,24 @@ func main() {
 	}()
 
 	app := fiber.New()
+	socketHub.RegisterRoutes(app, "/ws")
 
-	app.Use("/ws", func(c *fiber.Ctx) error {
-		if ws.IsWebSocketUpgrade(c) {
-			return c.Next()
-		}
-		return fiber.ErrUpgradeRequired
-	})
+	events, unsubscribe := tickHub.Subscribe(1024)
+	defer unsubscribe()
 
-	app.Get("/ws", ws.New(func(c *ws.Conn) {
-		events, unsubscribe := tickHub.Subscribe(256)
-		defer unsubscribe()
-
-		for event := range events {
-			if err := c.WriteJSON(event); err != nil {
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
 				return
+			case event, ok := <-events:
+				if !ok {
+					return
+				}
+				socketHub.BroadcastJSON(event)
 			}
 		}
-	}))
+	}()
 
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
@@ -56,7 +57,17 @@ func main() {
 		})
 	})
 
+	go func() {
+		<-ctx.Done()
+		socketHub.CloseAll()
+		if err := app.Shutdown(); err != nil {
+			log.Printf("failed to shutdown fiber app: %v", err)
+		}
+	}()
+
 	if err := app.Listen(config.App.Server.Host + ":" + config.App.Server.Port); err != nil {
-		log.Fatal(err)
+		if ctx.Err() == nil {
+			log.Fatal(err)
+		}
 	}
 }

@@ -2,32 +2,25 @@ package services
 
 import (
 	"sync"
-	"time"
 )
-
-type TickEvent struct {
-	InstrumentToken int64     `json:"instrumentToken"`
-	LTP             float64   `json:"ltp"`
-	Timestamp       time.Time `json:"timestamp"`
-}
 
 type TickHub struct {
 	mu          sync.RWMutex
-	subscribers map[chan TickEvent]struct{}
+	subscribers map[chan NormalizedTick]struct{}
 }
 
 func NewTickHub() *TickHub {
 	return &TickHub{
-		subscribers: make(map[chan TickEvent]struct{}),
+		subscribers: make(map[chan NormalizedTick]struct{}),
 	}
 }
 
-func (h *TickHub) Subscribe(buffer int) (<-chan TickEvent, func()) {
+func (h *TickHub) Subscribe(buffer int) (<-chan NormalizedTick, func()) {
 	if buffer <= 0 {
 		buffer = 1
 	}
 
-	ch := make(chan TickEvent, buffer)
+	ch := make(chan NormalizedTick, buffer)
 	h.mu.Lock()
 	h.subscribers[ch] = struct{}{}
 	h.mu.Unlock()
@@ -44,14 +37,24 @@ func (h *TickHub) Subscribe(buffer int) (<-chan TickEvent, func()) {
 	return ch, unsubscribe
 }
 
-func (h *TickHub) Publish(event TickEvent) {
+func (h *TickHub) Publish(event NormalizedTick) {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-
+	subscribers := make([]chan NormalizedTick, 0, len(h.subscribers))
 	for ch := range h.subscribers {
+		subscribers = append(subscribers, ch)
+	}
+	h.mu.RUnlock()
+
+	for _, ch := range subscribers {
 		select {
 		case ch <- event:
 		default:
 		}
 	}
+}
+
+func (h *TickHub) SubscribersCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.subscribers)
 }
