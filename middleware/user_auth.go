@@ -1,65 +1,147 @@
 package middleware
 
 import (
+	"errors"
+	"os"
 	"strings"
+	"time"
 
 	"feedprovider/models"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
 )
 
-// UserAuth validates user API token
+type UserJWTClaims struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	IsAdmin  bool   `json:"is_admin"`
+	jwt.RegisteredClaims
+}
+
+func jwtSecret() (string, error) {
+	secret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+	if secret == "" {
+		return "", errors.New("JWT_SECRET is not configured")
+	}
+	return secret, nil
+}
+
+func GenerateJWT(user *models.User) (string, error) {
+	secret, err := jwtSecret()
+	if err != nil {
+		return "", err
+	}
+
+	claims := UserJWTClaims{
+		UserID:   user.ID,
+		Username: user.Username,
+		IsAdmin:  user.IsAdmin,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(secret))
+}
+
 func UserAuth(db *gorm.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		authHeader := c.Get("Authorization")
 		if authHeader == "" {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "authorization token required",
+				"status_code": fiber.StatusUnauthorized,
+				"error":       "authorization token required",
 			})
 		}
 
-		// Extract token from "Bearer <token>"
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || parts[0] != "Bearer" {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "invalid authorization format, use: Bearer <token>",
+				"status_code": fiber.StatusUnauthorized,
+				"error":       "invalid authorization format, use: Bearer <token>",
 			})
 		}
 
 		token := parts[1]
+		secret, err := jwtSecret()
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"status_code": fiber.StatusInternalServerError,
+				"error":       "jwt authentication is not configured",
+			})
+		}
 
-		// Get user by token
-		user, err := models.GetUserByToken(db, token)
+		claims := &UserJWTClaims{}
+		parsedToken, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, errors.New("unexpected signing method")
+			}
+			return []byte(secret), nil
+		})
+
+		if err != nil || !parsedToken.Valid {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"status_code": fiber.StatusUnauthorized,
+				"error":       "invalid jwt token",
+			})
+		}
+
+		if claims.UserID == "" {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"status_code": fiber.StatusUnauthorized,
+				"error":       "invalid jwt claims",
+			})
+		}
+
+		user, err := models.GetUserByID(db, claims.UserID)
 		if err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-					"error": "invalid token",
+					"status_code": fiber.StatusUnauthorized,
+					"error":       "invalid token",
 				})
 			}
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "authentication failed",
+				"status_code": fiber.StatusInternalServerError,
+				"error":       "authentication failed",
 			})
 		}
 
-		// Check if user is active
 		if !user.IsActive {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
-				"error": "user account is disabled",
+				"status_code": fiber.StatusForbidden,
+				"error":       "user account is disabled",
 			})
 		}
 
-		// Check if token is expired
-		if user.IsTokenExpired() {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error":   "token expired",
-				"message": "please refresh your token",
-			})
-		}
-
-		// Store user in context for later use
 		c.Locals("user", user)
+		c.Locals("jwt_claims", claims)
 
 		return c.Next()
 	}
+}
+
+func AdminOnlyAuth(c *fiber.Ctx) error {
+	claimsValue := c.Locals("jwt_claims")
+	claims, ok := claimsValue.(*UserJWTClaims)
+	if !ok || claims == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"status_code": fiber.StatusUnauthorized,
+			"error":       "invalid jwt claims",
+		})
+	}
+
+	if !claims.IsAdmin {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"status_code": fiber.StatusForbidden,
+			"error":       "admin access required",
+		})
+	}
+
+	return c.Next()
 }

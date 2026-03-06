@@ -4,22 +4,21 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
 	"feedprovider/config"
 	"feedprovider/controller"
-	"feedprovider/middleware"
 	"feedprovider/models"
+	"feedprovider/router"
 	"feedprovider/services"
-	"feedprovider/validator"
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
 )
 
-// seedDefaultAdmin creates a default admin user if no admin exists
 func seedDefaultAdmin(db *gorm.DB) {
 	exists, err := models.AdminExists(db)
 	if err != nil {
@@ -32,7 +31,17 @@ func seedDefaultAdmin(db *gorm.DB) {
 		return
 	}
 
-	admin, err := models.CreateUser(db, "admin", true)
+	adminUsername := strings.TrimSpace(os.Getenv("DEFAULT_ADMIN_USERNAME"))
+	if adminUsername == "" {
+		adminUsername = "admin"
+	}
+
+	adminPassword := strings.TrimSpace(os.Getenv("DEFAULT_ADMIN_PASSWORD"))
+	if adminPassword == "" {
+		adminPassword = "admin123"
+	}
+
+	admin, err := models.CreateUserWithPassword(db, adminUsername, adminPassword, true)
 	if err != nil {
 		log.Printf("failed to create default admin: %v", err)
 		return
@@ -42,10 +51,9 @@ func seedDefaultAdmin(db *gorm.DB) {
 	fmt.Println("DEFAULT ADMIN CREATED")
 	fmt.Println(strings.Repeat("=", 80))
 	fmt.Printf("Username:   %s\n", admin.Username)
-	fmt.Printf("API Token:  %s\n", admin.APIToken)
-	fmt.Printf("Generated:  %s\n", admin.TokenGeneratedAt.Format("2006-01-02 15:04:05"))
+	fmt.Printf("Password:   %s\n", adminPassword)
 	fmt.Println(strings.Repeat("=", 80))
-	fmt.Println("SAVE THIS TOKEN - It will be used for admin API authentication")
+	fmt.Println("Use /auth/login with these credentials to get admin JWT token")
 	fmt.Println(strings.Repeat("=", 80) + "\n")
 }
 
@@ -53,13 +61,11 @@ func main() {
 	config.LoadConfig()
 	config.ConnectDatabase()
 
-	// Run migrations
 	if err := config.DB.AutoMigrate(&models.User{}); err != nil {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
 	log.Println("database migrations completed")
 
-	// Seed default admin
 	seedDefaultAdmin(config.DB)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -79,25 +85,12 @@ func main() {
 
 	app := fiber.New()
 
-	// Initialize controllers
 	adminController := controller.NewAdminController(config.DB, socketHub)
 	userController := controller.NewUserController(config.DB, socketHub)
 
-	// Admin routes (protected by admin secret)
-	adminRoutes := app.Group("/admin", middleware.AdminAuth)
-	adminRoutes.Post("/users", validator.ValidateCreateUser, adminController.CreateUser)
-	adminRoutes.Get("/users", adminController.GetAllUsers)
-	adminRoutes.Get("/users/:id", adminController.GetUser)
-	adminRoutes.Put("/users/:id/status", validator.ValidateUpdateStatus, adminController.UpdateUserStatus)
-	adminRoutes.Delete("/users/:id", adminController.DeleteUser)
-	adminRoutes.Get("/stats", adminController.GetStats)
+	router.RegisterAdminRoutes(app, adminController, config.DB)
+	router.RegisterUserRoutes(app, userController, config.DB)
 
-	// User routes (protected by user token)
-	userRoutes := app.Group("/api", middleware.UserAuth(config.DB))
-	userRoutes.Get("/profile", userController.GetProfile)
-	userRoutes.Post("/refresh-token", validator.ValidateRefreshToken, userController.RefreshToken)
-
-	// WebSocket feed endpoint (token validation in handler)
 	socketHub.RegisterRoutes(app, "/feed")
 
 	events, unsubscribe := tickHub.Subscribe(1024)
@@ -118,9 +111,10 @@ func main() {
 	}()
 
 	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"status":  "ok",
-			"service": "feedprovider",
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"status_code": fiber.StatusOK,
+			"status":      "ok",
+			"service":     "feedprovider",
 		})
 	})
 

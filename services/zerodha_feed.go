@@ -20,6 +20,7 @@ import (
 	"feedprovider/config"
 
 	"github.com/gorilla/websocket"
+	kiteconnect "github.com/zerodha/gokiteconnect/v4"
 )
 
 const (
@@ -189,8 +190,22 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 		return
 	}
 
-	if strings.TrimSpace(s.cfg.APIKey) == "" || strings.TrimSpace(s.cfg.AccessToken) == "" {
-		log.Println("zerodha feed skipped: set ZERODHA_API_KEY and ZERODHA_ACCESS_TOKEN in .env")
+	if strings.TrimSpace(s.cfg.APIKey) == "" {
+		log.Println("zerodha feed skipped: set ZERODHA_API_KEY in .env")
+		s.running.Store(false)
+		return
+	}
+
+	if s.shouldExchangeRequestToken() {
+		if err := s.ensureAccessTokenFromRequestToken(); err != nil {
+			log.Printf("zerodha feed skipped: %v", err)
+			s.running.Store(false)
+			return
+		}
+	}
+
+	if strings.TrimSpace(s.cfg.AccessToken) == "" {
+		log.Println("zerodha feed skipped: set ZERODHA_ACCESS_TOKEN or ZERODHA_REQUEST_TOKEN in .env")
 		s.running.Store(false)
 		return
 	}
@@ -201,13 +216,106 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 		return
 	}
 
-	if err := s.validateAccessToken(ctx); err != nil {
+	if err := s.validateAccessToken(); err != nil {
+		if s.shouldExchangeRequestToken() {
+			if exchangeErr := s.ensureAccessTokenFromRequestToken(); exchangeErr == nil {
+				if revalidateErr := s.validateAccessToken(); revalidateErr == nil {
+					go s.runReconnectLoop(ctx)
+					return
+				}
+			}
+		}
 		s.handleAuthFailure(err)
 		s.running.Store(false)
 		return
 	}
 
 	go s.runReconnectLoop(ctx)
+}
+
+func (s *ZerodhaFeedService) shouldExchangeRequestToken() bool {
+	requestToken := extractRequestToken(strings.TrimSpace(s.cfg.RequestToken))
+	if requestToken == "" {
+		return false
+	}
+
+	accessToken := strings.TrimSpace(s.cfg.AccessToken)
+	if accessToken == "" {
+		return true
+	}
+
+	if accessToken == requestToken {
+		return true
+	}
+
+	if strings.Contains(accessToken, "request_token=") {
+		return true
+	}
+
+	return false
+}
+
+func (s *ZerodhaFeedService) ensureAccessTokenFromRequestToken() error {
+	if strings.TrimSpace(s.cfg.APIKey) == "" {
+		return errors.New("set ZERODHA_API_KEY in .env")
+	}
+
+	requestToken := extractRequestToken(strings.TrimSpace(s.cfg.RequestToken))
+	if requestToken == "" {
+		return fmt.Errorf("set ZERODHA_REQUEST_TOKEN in .env (login URL: https://kite.zerodha.com/connect/login?v=3&api_key=%s)", s.cfg.APIKey)
+	}
+
+	if strings.TrimSpace(s.cfg.APISecret) == "" {
+		return errors.New("set ZERODHA_API_SECRET to exchange ZERODHA_REQUEST_TOKEN")
+	}
+
+	accessToken, err := s.exchangeRequestToken(requestToken)
+	if err != nil {
+		return err
+	}
+
+	s.cfg.AccessToken = accessToken
+	log.Println("zerodha access token generated from request token for current runtime")
+	log.Printf("set this in .env for reuse: ZERODHA_ACCESS_TOKEN=%s", accessToken)
+	return nil
+}
+
+func extractRequestToken(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+
+	if !strings.Contains(value, "request_token=") {
+		return value
+	}
+
+	parsedURL, err := url.Parse(value)
+	if err != nil {
+		return value
+	}
+
+	queryToken := strings.TrimSpace(parsedURL.Query().Get("request_token"))
+	if queryToken != "" {
+		return queryToken
+	}
+
+	return value
+}
+
+func (s *ZerodhaFeedService) exchangeRequestToken(requestToken string) (string, error) {
+	kc := kiteconnect.New(strings.TrimSpace(s.cfg.APIKey))
+	session, err := kc.GenerateSession(requestToken, strings.TrimSpace(s.cfg.APISecret))
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", errZerodhaAuthFailed, err)
+	}
+
+	accessToken := strings.TrimSpace(session.AccessToken)
+	if accessToken == "" {
+		return "", fmt.Errorf("%w: empty access token in session response", errZerodhaAuthFailed)
+	}
+
+	return accessToken, nil
 }
 
 func (s *ZerodhaFeedService) ConnectionState() ConnectionState {
@@ -440,38 +548,25 @@ func (s *ZerodhaFeedService) subscribeAll(conn *websocket.Conn) error {
 	return nil
 }
 
-func (s *ZerodhaFeedService) validateAccessToken(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.kite.trade/user/profile", nil)
-	if err != nil {
-		return fmt.Errorf("token validation request build failed: %w", err)
-	}
+func (s *ZerodhaFeedService) validateAccessToken() error {
+	kc := kiteconnect.New(strings.TrimSpace(s.cfg.APIKey))
+	kc.SetAccessToken(strings.TrimSpace(s.cfg.AccessToken))
 
-	req.Header.Set("X-Kite-Version", "3")
-	req.Header.Set("Authorization", fmt.Sprintf("token %s:%s", s.cfg.APIKey, s.cfg.AccessToken))
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("token validation request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
+	_, err := kc.GetUserProfile()
+	if err == nil {
 		return nil
 	}
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	if isAuthStatus(resp.StatusCode) {
-		message := parseKiteErrorMessage(body)
-		if isExpiredTokenMessage(message) {
-			return fmt.Errorf("%w: %s", errAccessTokenExpired, message)
-		}
-		if message == "" {
-			return fmt.Errorf("%w: status=%d", errZerodhaAuthFailed, resp.StatusCode)
-		}
-		return fmt.Errorf("%w: %s", errZerodhaAuthFailed, message)
+	message := strings.TrimSpace(err.Error())
+	if isExpiredTokenMessage(message) {
+		return fmt.Errorf("%w: %s", errAccessTokenExpired, message)
 	}
 
-	return fmt.Errorf("token validation failed with status=%d", resp.StatusCode)
+	if message == "" {
+		return fmt.Errorf("%w: token validation failed", errZerodhaAuthFailed)
+	}
+
+	return fmt.Errorf("%w: %s", errZerodhaAuthFailed, message)
 }
 
 func wrapDialError(err error, resp *http.Response) error {
@@ -575,6 +670,10 @@ func parseInstrumentIDs(raw string) []int64 {
 }
 
 func (s *ZerodhaFeedService) parseAndPublishTicks(payload []byte) {
+	if len(payload) == 1 {
+		return
+	}
+
 	if len(payload) < 2 {
 		log.Printf("zerodha malformed payload: length=%d", len(payload))
 		return

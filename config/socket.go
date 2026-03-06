@@ -1,20 +1,32 @@
 package config
 
 import (
+	"errors"
 	"feedprovider/models"
 	"log"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
 	ws "github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
 )
 
 type socketClient struct {
 	conn      *ws.Conn
 	userToken string
+	userID    string
 	mu        sync.Mutex
+}
+
+type socketJWTClaims struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	IsAdmin  bool   `json:"is_admin"`
+	jwt.RegisteredClaims
 }
 
 type SocketHub struct {
@@ -39,44 +51,40 @@ func (h *SocketHub) RegisterRoutes(app *fiber.App, path string) {
 	})
 
 	app.Get(path, ws.New(func(c *ws.Conn) {
-		// Get token from query parameter
+
 		token := c.Query("token")
 		if token == "" {
 			log.Println("websocket connection rejected: missing token")
-			_ = c.WriteJSON(fiber.Map{"error": "token required in query parameter"})
+			_ = c.WriteJSON(fiber.Map{"status_code": fiber.StatusUnauthorized, "error": "token required in query parameter"})
 			_ = c.Close()
 			return
 		}
 
-		// Validate token
-		user, err := models.GetUserByToken(h.db, token)
+		user, err := h.resolveUserFromSocketToken(token)
 		if err != nil {
 			log.Printf("websocket connection rejected: invalid token")
-			_ = c.WriteJSON(fiber.Map{"error": "invalid token"})
+			_ = c.WriteJSON(fiber.Map{"status_code": fiber.StatusUnauthorized, "error": "invalid token"})
 			_ = c.Close()
 			return
 		}
 
-		// Check if user is active
 		if !user.IsActive {
 			log.Printf("websocket connection rejected: user %s is disabled", user.Username)
-			_ = c.WriteJSON(fiber.Map{"error": "user account is disabled"})
+			_ = c.WriteJSON(fiber.Map{"status_code": fiber.StatusForbidden, "error": "user account is disabled"})
 			_ = c.Close()
 			return
 		}
 
-		// Check if token is expired
 		if user.IsTokenExpired() {
 			log.Printf("websocket connection rejected: token expired for user %s", user.Username)
-			_ = c.WriteJSON(fiber.Map{"error": "token expired", "message": "please refresh your token"})
+			_ = c.WriteJSON(fiber.Map{"status_code": fiber.StatusUnauthorized, "error": "token expired", "message": "please refresh your token"})
 			_ = c.Close()
 			return
 		}
 
-		// Create authenticated client
-		client := &socketClient{conn: c, userToken: token}
+		client := &socketClient{conn: c, userToken: token, userID: user.ID}
 		h.addClient(client)
-		log.Printf("websocket client connected: user=%s, token=%s...", user.Username, token[:10])
+		log.Printf("websocket client connected: user=%s, token=%s", user.Username, maskToken(token))
 		defer h.removeClient(client)
 
 		for {
@@ -159,12 +167,11 @@ func (h *SocketHub) removeClients(clients []*socketClient) {
 	}
 }
 
-// CloseUserConnections closes all connections for a specific user token
 func (h *SocketHub) CloseUserConnections(token string) {
 	h.mu.Lock()
 	clientsToClose := make([]*socketClient, 0)
 	for client := range h.clients {
-		if client.userToken == token {
+		if client.userToken == token || client.userID == token {
 			clientsToClose = append(clientsToClose, client)
 			delete(h.clients, client)
 		}
@@ -178,11 +185,45 @@ func (h *SocketHub) CloseUserConnections(token string) {
 	}
 
 	if len(clientsToClose) > 0 {
-		log.Printf("closed %d connections for token %s...", len(clientsToClose), token[:10])
+		log.Printf("closed %d connections for token %s", len(clientsToClose), maskToken(token))
 	}
 }
 
-// GetClientCount returns the current number of connected clients
+func maskToken(token string) string {
+	if len(token) <= 10 {
+		return token
+	}
+	return token[:10] + "..."
+}
+
+func (h *SocketHub) resolveUserFromSocketToken(token string) (*models.User, error) {
+	if user, err := h.resolveUserFromJWT(token); err == nil {
+		return user, nil
+	}
+
+	return models.GetUserByToken(h.db, token)
+}
+
+func (h *SocketHub) resolveUserFromJWT(token string) (*models.User, error) {
+	secret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+	if secret == "" {
+		return nil, errors.New("jwt secret not configured")
+	}
+
+	claims := &socketJWTClaims{}
+	parsedToken, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return []byte(secret), nil
+	})
+	if err != nil || !parsedToken.Valid || claims.UserID == "" {
+		return nil, errors.New("invalid jwt token")
+	}
+
+	return models.GetUserByID(h.db, claims.UserID)
+}
+
 func (h *SocketHub) GetClientCount() int {
 	h.mu.RLock()
 	count := len(h.clients)

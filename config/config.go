@@ -25,6 +25,7 @@ type DatabaseConfig struct {
 type ZerodhaConfig struct {
 	APIKey           string
 	APISecret        string
+	RequestToken     string
 	AccessToken      string
 	WSEndpoint       string
 	Instruments      string
@@ -66,6 +67,7 @@ func LoadConfig() {
 			Zerodha: ZerodhaConfig{
 				APIKey:           getEnv("ZERODHA_API_KEY", ""),
 				APISecret:        getEnv("ZERODHA_API_SECRET", ""),
+				RequestToken:     getEnv("ZERODHA_REQUEST_TOKEN", ""),
 				AccessToken:      getEnv("ZERODHA_ACCESS_TOKEN", ""),
 				WSEndpoint:       getEnv("ZERODHA_WS_ENDPOINT", "wss://ws.kite.trade"),
 				Instruments:      getEnv("ZERODHA_INSTRUMENTS", ""),
