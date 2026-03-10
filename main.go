@@ -61,7 +61,7 @@ func main() {
 	config.LoadConfig()
 	config.ConnectDatabase()
 
-	if err := config.DB.AutoMigrate(&models.User{}); err != nil {
+	if err := config.DB.AutoMigrate(&models.User{}, &models.Instrument{}); err != nil {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
 	log.Println("database migrations completed")
