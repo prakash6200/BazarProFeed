@@ -40,7 +40,7 @@ func (uc *UserController) Signup(c *fiber.Ctx) error {
 		})
 	}
 
-	user, err := models.CreateUserWithPassword(uc.db, req.Username, req.Password, false)
+	user, err := models.CreateUserWithPassword(uc.db, req.Username, req.Password, models.RoleUser)
 	if err != nil {
 		log.Printf("error creating user signup: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{

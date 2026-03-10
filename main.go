@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -31,17 +30,10 @@ func seedDefaultAdmin(db *gorm.DB) {
 		return
 	}
 
-	adminUsername := strings.TrimSpace(os.Getenv("DEFAULT_ADMIN_USERNAME"))
-	if adminUsername == "" {
-		adminUsername = "admin"
-	}
+	adminUsername := "admin@gmail.com"
+	adminPassword := "Admin@123"
 
-	adminPassword := strings.TrimSpace(os.Getenv("DEFAULT_ADMIN_PASSWORD"))
-	if adminPassword == "" {
-		adminPassword = "admin123"
-	}
-
-	admin, err := models.CreateUserWithPassword(db, adminUsername, adminPassword, true)
+	admin, err := models.CreateUserWithPassword(db, adminUsername, adminPassword, models.RoleAdmin)
 	if err != nil {
 		log.Printf("failed to create default admin: %v", err)
 		return
@@ -50,7 +42,7 @@ func seedDefaultAdmin(db *gorm.DB) {
 	fmt.Println("\n" + strings.Repeat("=", 80))
 	fmt.Println("DEFAULT ADMIN CREATED")
 	fmt.Println(strings.Repeat("=", 80))
-	fmt.Printf("Username:   %s\n", admin.Username)
+	fmt.Printf("Email:      %s\n", admin.Username)
 	fmt.Printf("Password:   %s\n", adminPassword)
 	fmt.Println(strings.Repeat("=", 80))
 	fmt.Println("Use /auth/login with these credentials to get admin JWT token")
@@ -61,18 +53,13 @@ func main() {
 	config.LoadConfig()
 	config.ConnectDatabase()
 
-	if err := config.DB.AutoMigrate(&models.User{}, &models.Instrument{}); err != nil {
-		log.Fatalf("failed to run migrations: %v", err)
-	}
-	log.Println("database migrations completed")
-
 	seedDefaultAdmin(config.DB)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	tickHub := services.NewTickHub()
-	zerodhaFeedService := services.NewZerodhaFeedService(config.App.Zerodha, tickHub)
+	zerodhaFeedService := services.NewZerodhaFeedService(config.App.Zerodha, config.DB, tickHub)
 	zerodhaFeedService.Start(ctx)
 
 	socketHub := config.NewSocketHub(config.DB)
@@ -86,9 +73,11 @@ func main() {
 	app := fiber.New()
 
 	adminController := controller.NewAdminController(config.DB, socketHub)
+	instrumentController := controller.NewAdminInstrumentController(config.DB)
 	userController := controller.NewUserController(config.DB, socketHub)
 
 	router.RegisterAdminRoutes(app, adminController, config.DB)
+	router.RegisterAdminInstrumentRoutes(app, instrumentController, config.DB)
 	router.RegisterUserRoutes(app, userController, config.DB)
 
 	socketHub.RegisterRoutes(app, "/feed")

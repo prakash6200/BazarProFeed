@@ -28,8 +28,26 @@ type Instrument struct {
 	InstrumentType  string     `json:"instrument_type"`
 	Segment         string     `json:"segment"`
 	Exchange        string     `json:"exchange"`
+	Status          string     `gorm:"type:varchar(10);not null;default:'ACTIVE';index" json:"status"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+const (
+	InstrumentStatusActive   = "ACTIVE"
+	InstrumentStatusInactive = "INACTIVE"
+)
+
+func NormalizeInstrumentStatus(status string) string {
+	trimmed := strings.ToUpper(strings.TrimSpace(status))
+	if trimmed == InstrumentStatusInactive {
+		return InstrumentStatusInactive
+	}
+	return InstrumentStatusActive
+}
+
+func (i *Instrument) IsActive() bool {
+	return NormalizeInstrumentStatus(i.Status) == InstrumentStatusActive
 }
 
 type CSVImportResult struct {
@@ -168,6 +186,7 @@ func parseInstrumentCSVRecord(record []string) (*Instrument, error) {
 		InstrumentType:  strings.TrimSpace(record[9]),
 		Segment:         strings.TrimSpace(record[10]),
 		Exchange:        strings.TrimSpace(record[11]),
+		Status:          InstrumentStatusActive,
 	}, nil
 }
 
@@ -255,6 +274,7 @@ func ImportInstrumentsFromCSV(db *gorm.DB, csvPath string) (*CSVImportResult, er
 }
 
 func CreateInstrument(db *gorm.DB, instrument *Instrument) error {
+	instrument.Status = NormalizeInstrumentStatus(instrument.Status)
 	return db.Create(instrument).Error
 }
 

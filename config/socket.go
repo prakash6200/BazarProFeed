@@ -25,7 +25,7 @@ type socketClient struct {
 type socketJWTClaims struct {
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
-	IsAdmin  bool   `json:"is_admin"`
+	Role     string `json:"role"`
 	jwt.RegisteredClaims
 }
 

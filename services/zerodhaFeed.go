@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"feedprovider/models"
 	"fmt"
 	"io"
 	"log"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	kiteconnect "github.com/zerodha/gokiteconnect/v4"
+	"gorm.io/gorm"
 )
 
 const (
@@ -155,6 +157,7 @@ func (r *subscriptionRegistry) SnapshotByMode(mode TickMode) []int64 {
 
 type ZerodhaFeedService struct {
 	cfg         config.ZerodhaConfig
+	db          *gorm.DB
 	tickHub     *TickHub
 	marketState *MarketStateManager
 	registry    *subscriptionRegistry
@@ -171,16 +174,17 @@ type ZerodhaFeedService struct {
 	writeMu sync.Mutex
 }
 
-func NewZerodhaFeedService(cfg config.ZerodhaConfig, tickHub *TickHub) *ZerodhaFeedService {
+func NewZerodhaFeedService(cfg config.ZerodhaConfig, db *gorm.DB, tickHub *TickHub) *ZerodhaFeedService {
 	service := &ZerodhaFeedService{
 		cfg:         cfg,
+		db:          db,
 		tickHub:     tickHub,
 		marketState: NewMarketStateManager(),
 		registry:    newSubscriptionRegistry(),
 		httpClient:  &http.Client{Timeout: 10 * time.Second},
 		state:       connectionStateDisconnected,
 	}
-	service.seedRegistryFromConfig()
+	service.seedRegistryFromDatabase()
 	return service
 }
 
@@ -211,7 +215,7 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 	}
 
 	if len(s.registry.SnapshotTokens()) == 0 {
-		log.Println("zerodha feed skipped: set ZERODHA_INDEX_INSTRUMENTS and/or ZERODHA_MCX_INSTRUMENTS (fallback: ZERODHA_INSTRUMENTS)")
+		log.Println("zerodha feed skipped: no instruments found in database, import instruments first")
 		s.running.Store(false)
 		return
 	}
@@ -646,29 +650,6 @@ func (s *ZerodhaFeedService) writeJSON(conn *websocket.Conn, payload any) error 
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
-func parseInstrumentIDs(raw string) []int64 {
-	parts := strings.Split(raw, ",")
-	seen := make(map[int64]struct{}, len(parts))
-	result := make([]int64, 0, len(parts))
-	for _, part := range parts {
-		value := strings.TrimSpace(part)
-		if value == "" {
-			continue
-		}
-		id, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			log.Printf("invalid instrument token skipped: %s", value)
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		result = append(result, id)
-	}
-	return result
-}
-
 func (s *ZerodhaFeedService) parseAndPublishTicks(payload []byte) {
 	if len(payload) == 1 {
 		return
@@ -797,42 +778,50 @@ func readPrice(packet []byte, offset int) float64 {
 	return float64(int32(binary.BigEndian.Uint32(packet[offset:offset+4]))) / 100.0
 }
 
-func (s *ZerodhaFeedService) seedRegistryFromConfig() {
-	indexTokens := parseInstrumentIDs(s.cfg.IndexInstruments)
-	for _, token := range indexTokens {
-		s.registry.Add(token, instrumentMeta{
-			Mode:     modeQuote,
-			Exchange: "NSE",
-			Symbol:   strconv.FormatInt(token, 10),
-		})
-	}
-
-	mcxTokens := parseInstrumentIDs(s.cfg.MCXInstruments)
-	for _, token := range mcxTokens {
-		s.registry.Add(token, instrumentMeta{
-			Mode:     modeFull,
-			Exchange: "MCX",
-			Symbol:   strconv.FormatInt(token, 10),
-		})
-	}
-
-	if len(indexTokens) > 0 || len(mcxTokens) > 0 {
+func (s *ZerodhaFeedService) seedRegistryFromDatabase() {
+	if s.db == nil {
+		log.Println("zerodha registry seed skipped: database not configured")
 		return
 	}
 
-	mode := TickMode(strings.ToLower(strings.TrimSpace(s.cfg.Mode)))
-	if mode != modeQuote && mode != modeFull {
-		mode = modeQuote
+	var instruments []models.Instrument
+	if err := s.db.Select("instrument_token", "trading_symbol", "segment", "exchange").Find(&instruments).Error; err != nil {
+		log.Printf("zerodha registry seed failed: %v", err)
+		return
 	}
 
-	fallbackTokens := parseInstrumentIDs(s.cfg.Instruments)
-	for _, token := range fallbackTokens {
-		s.registry.Add(token, instrumentMeta{
+	for _, instrument := range instruments {
+		if instrument.InstrumentToken <= 0 {
+			continue
+		}
+		if !instrument.IsActive() {
+			continue
+		}
+
+		exchange := strings.ToUpper(strings.TrimSpace(instrument.Exchange))
+		if exchange == "" {
+			exchange = "UNKNOWN"
+		}
+
+		symbol := strings.TrimSpace(instrument.TradingSymbol)
+		if symbol == "" {
+			symbol = strconv.FormatInt(instrument.InstrumentToken, 10)
+		}
+
+		segment := strings.ToUpper(strings.TrimSpace(instrument.Segment))
+		mode := modeQuote
+		if strings.Contains(segment, "MCX") || exchange == "MCX" {
+			mode = modeFull
+		}
+
+		s.registry.Add(instrument.InstrumentToken, instrumentMeta{
 			Mode:     mode,
-			Exchange: "UNKNOWN",
-			Symbol:   strconv.FormatInt(token, 10),
+			Exchange: exchange,
+			Symbol:   symbol,
 		})
 	}
+
+	log.Printf("zerodha registry seeded from database with %d instruments", len(s.registry.SnapshotTokens()))
 }
 
 func (s *ZerodhaFeedService) setConnectionState(state ConnectionState) {

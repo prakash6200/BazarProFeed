@@ -3,6 +3,7 @@ package models
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -16,9 +17,30 @@ type User struct {
 	APIToken         string    `gorm:"uniqueIndex;not null" json:"api_token"`
 	TokenGeneratedAt time.Time `gorm:"not null" json:"token_generated_at"`
 	IsActive         bool      `gorm:"default:true" json:"is_active"`
-	IsAdmin          bool      `gorm:"default:false" json:"is_admin"`
+	Role             string    `gorm:"type:varchar(10);not null;default:'USER';index" json:"role"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+const (
+	RoleUser  = "USER"
+	RoleAdmin = "ADMIN"
+)
+
+func normalizeRole(role string) string {
+	trimmed := strings.ToUpper(strings.TrimSpace(role))
+	if trimmed == RoleAdmin {
+		return RoleAdmin
+	}
+	return RoleUser
+}
+
+func (u *User) EffectiveRole() string {
+	return normalizeRole(u.Role)
+}
+
+func (u *User) IsAdminRole() bool {
+	return u.EffectiveRole() == RoleAdmin
 }
 
 func HashPassword(password string) (string, error) {
@@ -58,7 +80,7 @@ func (u *User) RefreshToken(db *gorm.DB) error {
 	return db.Save(u).Error
 }
 
-func CreateUser(db *gorm.DB, username string, isAdmin bool) (*User, error) {
+func CreateUser(db *gorm.DB, username, role string) (*User, error) {
 	token, err := GenerateToken()
 	if err != nil {
 		return nil, err
@@ -69,7 +91,7 @@ func CreateUser(db *gorm.DB, username string, isAdmin bool) (*User, error) {
 		APIToken:         token,
 		TokenGeneratedAt: time.Now(),
 		IsActive:         true,
-		IsAdmin:          isAdmin,
+		Role:             normalizeRole(role),
 	}
 
 	if err := db.Create(user).Error; err != nil {
@@ -79,7 +101,7 @@ func CreateUser(db *gorm.DB, username string, isAdmin bool) (*User, error) {
 	return user, nil
 }
 
-func CreateUserWithPassword(db *gorm.DB, username, password string, isAdmin bool) (*User, error) {
+func CreateUserWithPassword(db *gorm.DB, username, password, role string) (*User, error) {
 	token, err := GenerateToken()
 	if err != nil {
 		return nil, err
@@ -96,7 +118,7 @@ func CreateUserWithPassword(db *gorm.DB, username, password string, isAdmin bool
 		APIToken:         token,
 		TokenGeneratedAt: time.Now(),
 		IsActive:         true,
-		IsAdmin:          isAdmin,
+		Role:             normalizeRole(role),
 	}
 
 	if err := db.Create(user).Error; err != nil {
@@ -140,6 +162,6 @@ func DeleteUser(db *gorm.DB, id string) error {
 
 func AdminExists(db *gorm.DB) (bool, error) {
 	var count int64
-	err := db.Model(&User{}).Where("is_admin = ?", true).Count(&count).Error
+	err := db.Model(&User{}).Where("role = ?", RoleAdmin).Count(&count).Error
 	return count > 0, err
 }

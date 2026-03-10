@@ -6,14 +6,6 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-type CreateUserRequest struct {
-	Username string `json:"username"`
-}
-
-type UpdateStatusRequest struct {
-	IsActive bool `json:"is_active"`
-}
-
 type CreateInstrumentRequest struct {
 	InstrumentToken int64   `json:"instrument_token"`
 	ExchangeToken   int64   `json:"exchange_token"`
@@ -27,6 +19,7 @@ type CreateInstrumentRequest struct {
 	InstrumentType  string  `json:"instrument_type"`
 	Segment         string  `json:"segment"`
 	Exchange        string  `json:"exchange"`
+	Status          string  `json:"status"`
 }
 
 type UpdateInstrumentRequest struct {
@@ -42,58 +35,11 @@ type UpdateInstrumentRequest struct {
 	InstrumentType  *string  `json:"instrument_type"`
 	Segment         *string  `json:"segment"`
 	Exchange        *string  `json:"exchange"`
+	Status          *string  `json:"status"`
 }
 
 type ImportInstrumentsRequest struct {
 	FilePath string `json:"file_path"`
-}
-
-func ValidateCreateUser(c *fiber.Ctx) error {
-	var req CreateUserRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"status_code": fiber.StatusBadRequest,
-			"error":       "invalid request body",
-		})
-	}
-
-	req.Username = strings.TrimSpace(req.Username)
-	if req.Username == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"status_code": fiber.StatusBadRequest,
-			"error":       "username is required",
-		})
-	}
-
-	if len(req.Username) < 3 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"status_code": fiber.StatusBadRequest,
-			"error":       "username must be at least 3 characters",
-		})
-	}
-
-	if len(req.Username) > 50 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"status_code": fiber.StatusBadRequest,
-			"error":       "username must not exceed 50 characters",
-		})
-	}
-
-	c.Locals("validated_request", req)
-	return c.Next()
-}
-
-func ValidateUpdateStatus(c *fiber.Ctx) error {
-	var req UpdateStatusRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"status_code": fiber.StatusBadRequest,
-			"error":       "invalid request body",
-		})
-	}
-
-	c.Locals("validated_request", req)
-	return c.Next()
 }
 
 func ValidateCreateInstrument(c *fiber.Ctx) error {
@@ -111,6 +57,7 @@ func ValidateCreateInstrument(c *fiber.Ctx) error {
 	req.InstrumentType = strings.TrimSpace(req.InstrumentType)
 	req.Segment = strings.TrimSpace(req.Segment)
 	req.Exchange = strings.TrimSpace(req.Exchange)
+	req.Status = strings.TrimSpace(req.Status)
 
 	if req.InstrumentToken <= 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -131,6 +78,17 @@ func ValidateCreateInstrument(c *fiber.Ctx) error {
 			"status_code": fiber.StatusBadRequest,
 			"error":       "tradingsymbol is required",
 		})
+	}
+
+	if req.Status != "" {
+		status := strings.ToUpper(req.Status)
+		if status != "ACTIVE" && status != "INACTIVE" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"error":       "status must be ACTIVE or INACTIVE",
+			})
+		}
+		req.Status = status
 	}
 
 	c.Locals("validated_request", req)
@@ -176,6 +134,11 @@ func ValidateUpdateInstrument(c *fiber.Ctx) error {
 		req.Exchange = &trimmed
 	}
 
+	if req.Status != nil {
+		trimmed := strings.ToUpper(strings.TrimSpace(*req.Status))
+		req.Status = &trimmed
+	}
+
 	hasAnyField := req.InstrumentToken != nil ||
 		req.ExchangeToken != nil ||
 		req.TradingSymbol != nil ||
@@ -187,7 +150,8 @@ func ValidateUpdateInstrument(c *fiber.Ctx) error {
 		req.LotSize != nil ||
 		req.InstrumentType != nil ||
 		req.Segment != nil ||
-		req.Exchange != nil
+		req.Exchange != nil ||
+		req.Status != nil
 
 	if !hasAnyField {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -207,6 +171,13 @@ func ValidateUpdateInstrument(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
 			"error":       "exchange_token must be greater than 0",
+		})
+	}
+
+	if req.Status != nil && *req.Status != "ACTIVE" && *req.Status != "INACTIVE" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"error":       "status must be ACTIVE or INACTIVE",
 		})
 	}
 

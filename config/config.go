@@ -23,15 +23,11 @@ type DatabaseConfig struct {
 }
 
 type ZerodhaConfig struct {
-	APIKey           string
-	APISecret        string
-	RequestToken     string
-	AccessToken      string
-	WSEndpoint       string
-	Instruments      string
-	IndexInstruments string
-	MCXInstruments   string
-	Mode             string
+	APIKey       string
+	APISecret    string
+	RequestToken string
+	AccessToken  string
+	WSEndpoint   string
 }
 
 type Configuration struct {
@@ -65,15 +61,11 @@ func LoadConfig() {
 				SSLMode:  getEnv("DB_SSLMODE", "disable"),
 			},
 			Zerodha: ZerodhaConfig{
-				APIKey:           getEnv("ZERODHA_API_KEY", ""),
-				APISecret:        getEnv("ZERODHA_API_SECRET", ""),
-				RequestToken:     getEnv("ZERODHA_REQUEST_TOKEN", ""),
-				AccessToken:      getEnv("ZERODHA_ACCESS_TOKEN", ""),
-				WSEndpoint:       getEnv("ZERODHA_WS_ENDPOINT", "wss://ws.kite.trade"),
-				Instruments:      getEnv("ZERODHA_INSTRUMENTS", ""),
-				IndexInstruments: getEnv("ZERODHA_INDEX_INSTRUMENTS", ""),
-				MCXInstruments:   getEnv("ZERODHA_MCX_INSTRUMENTS", ""),
-				Mode:             getEnv("ZERODHA_MODE", "ltp"),
+				APIKey:       getEnv("ZERODHA_API_KEY", ""),
+				APISecret:    getEnv("ZERODHA_API_SECRET", ""),
+				RequestToken: getEnv("ZERODHA_REQUEST_TOKEN", ""),
+				AccessToken:  getEnv("ZERODHA_ACCESS_TOKEN", ""),
+				WSEndpoint:   getEnv("ZERODHA_WS_ENDPOINT", "wss://ws.kite.trade"),
 			},
 		}
 	})

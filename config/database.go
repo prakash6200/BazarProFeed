@@ -1,6 +1,7 @@
 package config
 
 import (
+	"feedprovider/models"
 	"fmt"
 	"log"
 	"sync"
@@ -56,8 +57,14 @@ func ConnectDatabase() {
 		log.Fatal("failed to ping database: ", err)
 	}
 
+	if err := db.AutoMigrate(&models.User{}, &models.Instrument{}); err != nil {
+		_ = sqlDB.Close()
+		log.Fatal("failed to run migrations: ", err)
+	}
+
 	DB = db
 	log.Println("database connected successfully")
+	log.Println("database migrations completed")
 }
 
 func CloseDatabase() error {

@@ -16,7 +16,7 @@ import (
 type UserJWTClaims struct {
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
-	IsAdmin  bool   `json:"is_admin"`
+	Role     string `json:"role"`
 	jwt.RegisteredClaims
 }
 
@@ -37,7 +37,7 @@ func GenerateJWT(user *models.User) (string, error) {
 	claims := UserJWTClaims{
 		UserID:   user.ID,
 		Username: user.Username,
-		IsAdmin:  user.IsAdmin,
+		Role:     user.EffectiveRole(),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -128,15 +128,24 @@ func UserAuth(db *gorm.DB) fiber.Handler {
 
 func AdminOnlyAuth(c *fiber.Ctx) error {
 	claimsValue := c.Locals("jwt_claims")
-	claims, ok := claimsValue.(*UserJWTClaims)
-	if !ok || claims == nil {
+	_, ok := claimsValue.(*UserJWTClaims)
+	if !ok {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"status_code": fiber.StatusUnauthorized,
 			"error":       "invalid jwt claims",
 		})
 	}
 
-	if !claims.IsAdmin {
+	userValue := c.Locals("user")
+	user, ok := userValue.(*models.User)
+	if !ok || user == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"status_code": fiber.StatusUnauthorized,
+			"error":       "invalid authenticated user",
+		})
+	}
+
+	if !user.IsAdminRole() {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 			"status_code": fiber.StatusForbidden,
 			"error":       "admin access required",
