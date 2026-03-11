@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -254,23 +255,62 @@ func ValidateUpdateInstrument(c *fiber.Ctx) error {
 }
 
 func ValidateImportInstruments(c *fiber.Ctx) error {
-	var req ImportInstrumentsRequest
-	if len(c.Body()) > 0 {
-		if err := c.BodyParser(&req); err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"status_code": fiber.StatusBadRequest,
-				"message":     "invalid request body",
-				"error":       "invalid request body",
-			})
-		}
+	contentType := strings.ToLower(strings.TrimSpace(c.Get("Content-Type")))
+	if !strings.Contains(contentType, "multipart/form-data") {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "content-type must be multipart/form-data",
+			"error":       "content-type must be multipart/form-data",
+		})
 	}
 
-	req.FilePath = strings.TrimSpace(req.FilePath)
-	if req.FilePath == "" {
-		req.FilePath = "instruments.csv"
+	form, err := c.MultipartForm()
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid multipart form-data",
+			"error":       "invalid multipart form-data",
+		})
 	}
 
-	c.Locals("validated_request", req)
+	files, ok := form.File["file"]
+	if !ok || len(files) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "file is required in form-data",
+			"error":       "file is required in form-data",
+		})
+	}
+
+	if len(files) != 1 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "only single file upload is allowed",
+			"error":       "only single file upload is allowed",
+		})
+	}
+
+	totalFiles := 0
+	for _, fileHeaders := range form.File {
+		totalFiles += len(fileHeaders)
+	}
+	if totalFiles != 1 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "only one file is allowed in request",
+			"error":       "only one file is allowed in request",
+		})
+	}
+
+	fileName := strings.TrimSpace(files[0].Filename)
+	if strings.ToLower(filepath.Ext(fileName)) != ".csv" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "only csv file upload is allowed",
+			"error":       "only csv file upload is allowed",
+		})
+	}
+
 	return c.Next()
 }
 

@@ -4,7 +4,10 @@ import (
 	"errors"
 	"feedprovider/models"
 	"feedprovider/validator"
+	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,22 +38,78 @@ func parseInstrumentExpiry(value string) (*time.Time, error) {
 }
 
 func (ic *AdminInstrumentController) ImportInstruments(c *fiber.Ctx) error {
-	req := c.Locals("validated_request").(validator.ImportInstrumentsRequest)
+	uploadFile, err := c.FormFile("file")
+	if err != nil || uploadFile == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "file is required in form-data",
+			"error":       "file is required in form-data",
+		})
+	}
 
-	result, err := models.ImportInstrumentsFromCSV(ic.db, req.FilePath)
+	if strings.ToLower(filepath.Ext(strings.TrimSpace(uploadFile.Filename))) != ".csv" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "only csv file upload is allowed",
+			"error":       "only csv file upload is allowed",
+		})
+	}
+
+	uploaded, err := uploadFile.Open()
 	if err != nil {
-		log.Printf("error importing instruments from csv %s: %v", req.FilePath, err)
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "failed to read uploaded file",
+			"error":       "failed to read uploaded file",
+		})
+	}
+	defer uploaded.Close()
+
+	tempFile, err := os.CreateTemp("", "instruments-*.csv")
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to create temporary file for upload",
+			"error":       "failed to create temporary file for upload",
+		})
+	}
+
+	if _, err := io.Copy(tempFile, uploaded); err != nil {
+		_ = tempFile.Close()
+		_ = os.Remove(tempFile.Name())
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to save uploaded file",
+			"error":       "failed to save uploaded file",
+		})
+	}
+
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tempFile.Name())
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to finalize uploaded file",
+			"error":       "failed to finalize uploaded file",
+		})
+	}
+
+	csvPath := tempFile.Name()
+	defer os.Remove(csvPath)
+
+	result, err := models.ImportInstrumentsFromCSV(ic.db, csvPath)
+	if err != nil {
+		log.Printf("error importing instruments from csv %s: %v", csvPath, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "failed to import instruments",
-			"error":       "failed to import instruments",
+			"error":       err.Error(),
 		})
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status_code": fiber.StatusOK,
 		"message":     "instruments imported successfully",
-		"file_path":   req.FilePath,
+		"file_name":   uploadFile.Filename,
 		"result":      result,
 	})
 }

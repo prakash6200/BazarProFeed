@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -201,8 +202,49 @@ func parseInstrumentCSVRecord(record []string) (*Instrument, error) {
 	}, nil
 }
 
+func resolveCSVPath(csvPath string) (string, error) {
+	trimmed := strings.TrimSpace(csvPath)
+	if trimmed == "" {
+		return "", errors.New("csv path is empty")
+	}
+
+	if filepath.IsAbs(trimmed) {
+		if _, err := os.Stat(trimmed); err != nil {
+			return "", err
+		}
+		return trimmed, nil
+	}
+
+	candidates := []string{trimmed}
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(cwd, trimmed))
+	}
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		candidates = append(candidates,
+			filepath.Join(exeDir, trimmed),
+			filepath.Join(exeDir, "..", trimmed),
+			filepath.Join(exeDir, "..", "..", trimmed),
+		)
+	}
+
+	for _, candidate := range candidates {
+		resolved := filepath.Clean(candidate)
+		if _, err := os.Stat(resolved); err == nil {
+			return resolved, nil
+		}
+	}
+
+	return "", fmt.Errorf("csv file not found for path %q", trimmed)
+}
+
 func ImportInstrumentsFromCSV(db *gorm.DB, csvPath string) (*CSVImportResult, error) {
-	file, err := os.Open(csvPath)
+	resolvedPath, err := resolveCSVPath(csvPath)
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := os.Open(resolvedPath)
 	if err != nil {
 		return nil, err
 	}

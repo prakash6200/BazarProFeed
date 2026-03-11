@@ -70,7 +70,9 @@ func main() {
 		}
 	}()
 
-	app := fiber.New()
+	app := fiber.New(fiber.Config{
+		BodyLimit: 50 * 1024 * 1024, // 50 MB upload limit for multipart CSV upload
+	})
 
 	adminController := controller.NewAdminController(config.DB, socketHub)
 	instrumentController := controller.NewAdminInstrumentController(config.DB)
