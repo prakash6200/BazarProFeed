@@ -65,8 +65,8 @@ const (
 )
 
 var (
-	errZerodhaAuthFailed  = errors.New("zerodha authentication failed")
-	errAccessTokenExpired = errors.New("zerodha access token expired")
+	ErrZerodhaAuthFailed  = errors.New("zerodha authentication failed")
+	ErrAccessTokenExpired = errors.New("zerodha access token expired")
 )
 
 type ConnectionState string
@@ -162,8 +162,10 @@ type ZerodhaFeedService struct {
 	marketState *MarketStateManager
 	registry    *subscriptionRegistry
 	httpClient  *http.Client
+	baseCtx     context.Context
 
 	running atomic.Bool
+	tokenMu sync.RWMutex
 
 	stateMu sync.RWMutex
 	state   ConnectionState
@@ -185,10 +187,14 @@ func NewZerodhaFeedService(cfg config.ZerodhaConfig, db *gorm.DB, tickHub *TickH
 		state:       connectionStateDisconnected,
 	}
 	service.seedRegistryFromDatabase()
+	service.loadAccessTokenFromDatabase()
 	return service
 }
 
 func (s *ZerodhaFeedService) Start(ctx context.Context) {
+	s.baseCtx = ctx
+	s.loadAccessTokenFromDatabase()
+
 	if !s.running.CompareAndSwap(false, true) {
 		log.Println("zerodha feed already running, skipping duplicate start")
 		return
@@ -208,7 +214,7 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 		}
 	}
 
-	if strings.TrimSpace(s.cfg.AccessToken) == "" {
+	if strings.TrimSpace(s.getAccessToken()) == "" {
 		log.Println("zerodha feed skipped: set ZERODHA_ACCESS_TOKEN or ZERODHA_REQUEST_TOKEN in .env")
 		s.running.Store(false)
 		return
@@ -237,13 +243,33 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 	go s.runReconnectLoop(ctx)
 }
 
+func (s *ZerodhaFeedService) loadAccessTokenFromDatabase() {
+	if s.db == nil {
+		return
+	}
+
+	session, err := models.GetActiveZerodhaSession(s.db)
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Printf("failed to load zerodha access token from database: %v", err)
+		}
+		return
+	}
+
+	if strings.TrimSpace(session.AccessToken) == "" {
+		return
+	}
+
+	s.setAccessToken(session.AccessToken)
+}
+
 func (s *ZerodhaFeedService) shouldExchangeRequestToken() bool {
 	requestToken := extractRequestToken(strings.TrimSpace(s.cfg.RequestToken))
 	if requestToken == "" {
 		return false
 	}
 
-	accessToken := strings.TrimSpace(s.cfg.AccessToken)
+	accessToken := s.getAccessToken()
 	if accessToken == "" {
 		return true
 	}
@@ -275,13 +301,98 @@ func (s *ZerodhaFeedService) ensureAccessTokenFromRequestToken() error {
 
 	accessToken, err := s.exchangeRequestToken(requestToken)
 	if err != nil {
+		_ = s.persistLastError(err.Error())
 		return err
 	}
 
-	s.cfg.AccessToken = accessToken
+	if _, err := s.persistAccessToken(accessToken, ""); err != nil {
+		return err
+	}
 	log.Println("zerodha access token generated from request token for current runtime")
 	log.Printf("set this in .env for reuse: ZERODHA_ACCESS_TOKEN=%s", accessToken)
 	return nil
+}
+
+func (s *ZerodhaFeedService) UpdateAccessTokenFromRequestToken(requestToken, adminID string) (*models.ZerodhaSession, error) {
+	requestToken = extractRequestToken(requestToken)
+	if requestToken == "" {
+		return nil, errors.New("request_token is required")
+	}
+
+	if strings.TrimSpace(s.cfg.APIKey) == "" {
+		return nil, errors.New("ZERODHA_API_KEY is not configured")
+	}
+
+	if strings.TrimSpace(s.cfg.APISecret) == "" {
+		return nil, errors.New("ZERODHA_API_SECRET is not configured")
+	}
+
+	accessToken, err := s.exchangeRequestToken(requestToken)
+	if err != nil {
+		_ = s.persistLastError(err.Error())
+		return nil, err
+	}
+
+	session, err := s.persistAccessToken(accessToken, adminID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.restartWithLatestToken()
+	return session, nil
+}
+
+func (s *ZerodhaFeedService) persistAccessToken(accessToken, adminID string) (*models.ZerodhaSession, error) {
+	if s.db == nil {
+		return nil, errors.New("database not configured")
+	}
+
+	session, err := models.SaveActiveZerodhaSession(s.db, accessToken, adminID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.setAccessToken(accessToken)
+	if err := models.UpdateActiveZerodhaSessionLastError(s.db, ""); err != nil {
+		log.Printf("failed to clear zerodha session last_error: %v", err)
+	}
+
+	return session, nil
+}
+
+func (s *ZerodhaFeedService) persistLastError(lastError string) error {
+	if s.db == nil {
+		return nil
+	}
+	return models.UpdateActiveZerodhaSessionLastError(s.db, lastError)
+}
+
+func (s *ZerodhaFeedService) restartWithLatestToken() {
+	conn := s.getConn()
+	if conn != nil {
+		_ = conn.Close()
+	}
+
+	if s.running.Load() {
+		return
+	}
+
+	if s.baseCtx != nil && s.baseCtx.Err() == nil {
+		s.Start(s.baseCtx)
+	}
+}
+
+func (s *ZerodhaFeedService) getAccessToken() string {
+	s.tokenMu.RLock()
+	accessToken := strings.TrimSpace(s.cfg.AccessToken)
+	s.tokenMu.RUnlock()
+	return accessToken
+}
+
+func (s *ZerodhaFeedService) setAccessToken(accessToken string) {
+	s.tokenMu.Lock()
+	s.cfg.AccessToken = strings.TrimSpace(accessToken)
+	s.tokenMu.Unlock()
 }
 
 func extractRequestToken(raw string) string {
@@ -311,12 +422,12 @@ func (s *ZerodhaFeedService) exchangeRequestToken(requestToken string) (string, 
 	kc := kiteconnect.New(strings.TrimSpace(s.cfg.APIKey))
 	session, err := kc.GenerateSession(requestToken, strings.TrimSpace(s.cfg.APISecret))
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", errZerodhaAuthFailed, err)
+		return "", fmt.Errorf("%w: %v", ErrZerodhaAuthFailed, err)
 	}
 
 	accessToken := strings.TrimSpace(session.AccessToken)
 	if accessToken == "" {
-		return "", fmt.Errorf("%w: empty access token in session response", errZerodhaAuthFailed)
+		return "", fmt.Errorf("%w: empty access token in session response", ErrZerodhaAuthFailed)
 	}
 
 	return accessToken, nil
@@ -438,7 +549,7 @@ func (s *ZerodhaFeedService) connectAndRead(ctx context.Context) error {
 
 	query := wsURL.Query()
 	query.Set("api_key", s.cfg.APIKey)
-	query.Set("access_token", s.cfg.AccessToken)
+	query.Set("access_token", s.getAccessToken())
 	wsURL.RawQuery = query.Encode()
 
 	s.setConnectionState(connectionStateConnecting)
@@ -554,23 +665,27 @@ func (s *ZerodhaFeedService) subscribeAll(conn *websocket.Conn) error {
 
 func (s *ZerodhaFeedService) validateAccessToken() error {
 	kc := kiteconnect.New(strings.TrimSpace(s.cfg.APIKey))
-	kc.SetAccessToken(strings.TrimSpace(s.cfg.AccessToken))
+	kc.SetAccessToken(s.getAccessToken())
 
 	_, err := kc.GetUserProfile()
 	if err == nil {
+		_ = s.persistLastError("")
 		return nil
 	}
 
 	message := strings.TrimSpace(err.Error())
 	if isExpiredTokenMessage(message) {
-		return fmt.Errorf("%w: %s", errAccessTokenExpired, message)
+		_ = s.persistLastError(message)
+		return fmt.Errorf("%w: %s", ErrAccessTokenExpired, message)
 	}
 
 	if message == "" {
-		return fmt.Errorf("%w: token validation failed", errZerodhaAuthFailed)
+		_ = s.persistLastError("token validation failed")
+		return fmt.Errorf("%w: token validation failed", ErrZerodhaAuthFailed)
 	}
 
-	return fmt.Errorf("%w: %s", errZerodhaAuthFailed, message)
+	_ = s.persistLastError(message)
+	return fmt.Errorf("%w: %s", ErrZerodhaAuthFailed, message)
 }
 
 func wrapDialError(err error, resp *http.Response) error {
@@ -583,12 +698,12 @@ func wrapDialError(err error, resp *http.Response) error {
 	if isAuthStatus(resp.StatusCode) {
 		message := parseKiteErrorMessage(body)
 		if isExpiredTokenMessage(message) {
-			return fmt.Errorf("%w: %s", errAccessTokenExpired, message)
+			return fmt.Errorf("%w: %s", ErrAccessTokenExpired, message)
 		}
 		if message == "" {
-			return fmt.Errorf("%w: status=%d", errZerodhaAuthFailed, resp.StatusCode)
+			return fmt.Errorf("%w: status=%d", ErrZerodhaAuthFailed, resp.StatusCode)
 		}
-		return fmt.Errorf("%w: %s", errZerodhaAuthFailed, message)
+		return fmt.Errorf("%w: %s", ErrZerodhaAuthFailed, message)
 	}
 
 	return fmt.Errorf("dial failed with status=%d: %w", resp.StatusCode, err)
@@ -626,16 +741,19 @@ func isExpiredTokenMessage(message string) bool {
 }
 
 func isAuthFailure(err error) bool {
-	return errors.Is(err, errAccessTokenExpired) || errors.Is(err, errZerodhaAuthFailed)
+	return errors.Is(err, ErrAccessTokenExpired) || errors.Is(err, ErrZerodhaAuthFailed)
 }
 
 func (s *ZerodhaFeedService) handleAuthFailure(err error) {
 	switch {
-	case errors.Is(err, errAccessTokenExpired):
-		log.Printf("zerodha auth failure: access token expired. regenerate token and update ZERODHA_ACCESS_TOKEN. details=%v", err)
-	case errors.Is(err, errZerodhaAuthFailed):
-		log.Printf("zerodha auth failure: verify ZERODHA_API_KEY and ZERODHA_ACCESS_TOKEN. details=%v", err)
+	case errors.Is(err, ErrAccessTokenExpired):
+		_ = s.persistLastError(err.Error())
+		log.Printf("zerodha auth failure: access token expired. admin must set fresh request_token from admin API. details=%v", err)
+	case errors.Is(err, ErrZerodhaAuthFailed):
+		_ = s.persistLastError(err.Error())
+		log.Printf("zerodha auth failure: verify Zerodha credentials and active DB session token. details=%v", err)
 	default:
+		_ = s.persistLastError(err.Error())
 		log.Printf("zerodha auth failure: %v", err)
 	}
 }
@@ -869,10 +987,10 @@ func sanitizeInstrumentIdentity(token int64, exchange, symbol string) (string, s
 
 func parseAuthErrorFromTextMessage(text string) error {
 	if isExpiredTokenMessage(text) {
-		return fmt.Errorf("%w: %s", errAccessTokenExpired, text)
+		return fmt.Errorf("%w: %s", ErrAccessTokenExpired, text)
 	}
 	if strings.Contains(text, "tokenexception") || strings.Contains(text, "invalid api_key") {
-		return fmt.Errorf("%w: %s", errZerodhaAuthFailed, text)
+		return fmt.Errorf("%w: %s", ErrZerodhaAuthFailed, text)
 	}
 	return nil
 }

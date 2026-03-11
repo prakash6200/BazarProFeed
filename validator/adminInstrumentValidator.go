@@ -2,6 +2,7 @@ package validator
 
 import (
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -62,6 +63,42 @@ type InstrumentListQueryRequest struct {
 }
 
 var instrumentIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
+
+var allowedInstrumentTypes = map[string]struct{}{
+	"CE":  {},
+	"EQ":  {},
+	"FUT": {},
+	"PE":  {},
+}
+
+var allowedSegments = map[string]struct{}{
+	"INDICES": {},
+	"MCX-FUT": {},
+	"MCX-OPT": {},
+	"NCO-FUT": {},
+	"NFO-FUT": {},
+	"NFO-OPT": {},
+}
+
+var allowedExchanges = map[string]struct{}{
+	"MCX": {},
+	"NCO": {},
+	"NFO": {},
+}
+
+func isAllowedEnumValue(value string, allowed map[string]struct{}) bool {
+	_, ok := allowed[value]
+	return ok
+}
+
+func allowedEnumValues(allowed map[string]struct{}) string {
+	values := make([]string, 0, len(allowed))
+	for value := range allowed {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return strings.Join(values, ", ")
+}
 
 func ValidateCreateInstrument(c *fiber.Ctx) error {
 	var req CreateInstrumentRequest
@@ -312,6 +349,30 @@ func ValidateListInstrumentsQuery(c *fiber.Ctx) error {
 	status := strings.ToUpper(strings.TrimSpace(c.Query("status")))
 	expiry := strings.TrimSpace(c.Query("expiry"))
 	search := strings.TrimSpace(c.Query("search"))
+
+	if instrumentType != "" && !isAllowedEnumValue(instrumentType, allowedInstrumentTypes) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "instrument_type must be one of: " + allowedEnumValues(allowedInstrumentTypes),
+			"error":       "instrument_type must be one of: " + allowedEnumValues(allowedInstrumentTypes),
+		})
+	}
+
+	if segment != "" && !isAllowedEnumValue(segment, allowedSegments) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "segment must be one of: " + allowedEnumValues(allowedSegments),
+			"error":       "segment must be one of: " + allowedEnumValues(allowedSegments),
+		})
+	}
+
+	if exchange != "" && !isAllowedEnumValue(exchange, allowedExchanges) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "exchange must be one of: " + allowedEnumValues(allowedExchanges),
+			"error":       "exchange must be one of: " + allowedEnumValues(allowedExchanges),
+		})
+	}
 
 	if status != "" && status != "ACTIVE" && status != "INACTIVE" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{

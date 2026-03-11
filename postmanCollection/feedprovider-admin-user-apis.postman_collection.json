@@ -521,6 +521,65 @@
           "response": []
         },
         {
+          "name": "Get Zerodha Session Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/zerodha/session/status",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "zerodha",
+                "session",
+                "status"
+              ]
+            },
+            "description": "Returns current active Zerodha session status from database"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Zerodha Session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"request_token\": \"{{request_token}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/zerodha/session",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "zerodha",
+                "session"
+              ]
+            },
+            "description": "Exchange fresh Zerodha request_token for access_token and store active session in database"
+          },
+          "response": []
+        },
+        {
           "name": "Get Admin Stats",
           "request": {
             "method": "GET",
@@ -579,6 +638,11 @@
     },
     {
       "key": "instrument_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "request_token",
       "value": "",
       "type": "string"
     }
