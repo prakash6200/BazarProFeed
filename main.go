@@ -15,6 +15,7 @@ import (
 	"feedprovider/services"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"gorm.io/gorm"
 )
 
@@ -73,6 +74,12 @@ func main() {
 	app := fiber.New(fiber.Config{
 		BodyLimit: 50 * 1024 * 1024, // 50 MB upload limit for multipart CSV upload
 	})
+
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: "*",
+		AllowMethods: "GET,POST,PUT,DELETE,OPTIONS",
+		AllowHeaders: "Origin,Content-Type,Accept,Authorization",
+	}))
 
 	adminController := controller.NewAdminController(config.DB, socketHub)
 	instrumentController := controller.NewAdminInstrumentController(config.DB)
