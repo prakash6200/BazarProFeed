@@ -1,0 +1,30 @@
+root = "."
+tmp_dir = "tmp"
+
+testdata_dir = "testdata"
+
+[build]
+  cmd = "go build -o ./tmp/feedprovider ."
+  bin = "./tmp/feedprovider"
+  full_bin = "./tmp/feedprovider"
+  include_ext = ["go", "env"]
+  exclude_dir = ["tmp", "vendor", ".git", "postmanCollection"]
+  exclude_file = []
+  exclude_regex = ["_test.go"]
+  follow_symlink = false
+  delay = 500
+  stop_on_error = true
+  send_interrupt = true
+  kill_delay = 500
+
+[log]
+  time = true
+
+[color]
+  main = "yellow"
+  watcher = "cyan"
+  build = "green"
+  runner = "magenta"
+
+[misc]
+  clean_on_exit = true

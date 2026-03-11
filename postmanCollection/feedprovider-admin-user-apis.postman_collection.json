@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "b9a3c6de-8f62-4d1b-9d6d-5df7f1b3f9a1",
     "name": "FeedProvider Admin & User APIs",
-    "description": "Postman collection for current FeedProvider APIs.\n\nAuth flow:\n1) /auth/signup (optional)\n2) /auth/login to get jwt_token and api_token\n3) Use Authorization: Bearer <jwt_token> for /api and /admin routes\n\nWebSocket Feed:\n- URL: ws://localhost:8081/feed?token={{jwt_token}}",
+    "description": "Postman collection for current FeedProvider APIs.\n\nAuth flow:\n1) /auth/signup (optional)\n2) /auth/login to get jwt_token and api_token\n3) Use Authorization: Bearer <jwt_token> for /api and /admin routes\n\nWebSocket Feed:\n- URL: ws://localhost:8081/feed?token={{jwt_token}}\n\nZerodha session flow (admin):\n1) Login as admin and get jwt_token\n2) Obtain fresh request_token from Zerodha login\n3) Call POST /admin/zerodha/session with request_token\n4) Access token is stored in DB and feed service uses latest active token\n5) Check status using GET /admin/zerodha/session/status",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -55,7 +55,8 @@
                 "auth",
                 "signup"
               ]
-            }
+            },
+            "description": "Create a normal USER account.\nValidation:\n- username: 3 to 50 chars\n- password: minimum 6 chars"
           },
           "response": []
         },
@@ -98,7 +99,8 @@
                 "auth",
                 "login"
               ]
-            }
+            },
+            "description": "Login and generate JWT + API token.\nPostman test script auto-saves:\n- jwt_token\n- api_token"
           },
           "response": []
         }
@@ -126,7 +128,8 @@
                 "api",
                 "profile"
               ]
-            }
+            },
+            "description": "Get authenticated user profile using Bearer JWT."
           },
           "response": []
         },
@@ -172,7 +175,8 @@
                 "api",
                 "refresh-token"
               ]
-            }
+            },
+            "description": "Refresh both API token and JWT token for current logged in user.\nBody requires old_token = current api_token.\nPostman test script updates collection tokens automatically."
           },
           "response": []
         }
@@ -208,7 +212,8 @@
                 "admin",
                 "users"
               ]
-            }
+            },
+            "description": "Admin-only. Create new USER account without password login flow."
           },
           "response": []
         },
@@ -231,7 +236,8 @@
                 "admin",
                 "users"
               ]
-            }
+            },
+            "description": "Admin-only. List all users with role and active status."
           },
           "response": []
         },
@@ -255,7 +261,8 @@
                 "users",
                 "{{user_id}}"
               ]
-            }
+            },
+            "description": "Admin-only. Fetch user detail by UUID user_id."
           },
           "response": []
         },
@@ -288,7 +295,8 @@
                 "{{user_id}}",
                 "status"
               ]
-            }
+            },
+            "description": "Admin-only. Enable/disable user.\nBody: is_active = true/false"
           },
           "response": []
         },
@@ -312,7 +320,8 @@
                 "users",
                 "{{user_id}}"
               ]
-            }
+            },
+            "description": "Admin-only. Delete non-admin user by user_id."
           },
           "response": []
         },
@@ -344,7 +353,8 @@
                 "instruments",
                 "import"
               ]
-            }
+            },
+            "description": "Admin-only. Import instruments from CSV file path.\nDefault file_path is instruments.csv if omitted."
           },
           "response": []
         },
@@ -405,7 +415,8 @@
                   "value": "VBL"
                 }
               ]
-            }
+            },
+            "description": "Admin-only paginated instrument list with filters.\nQuery:\n- page: positive int\n- limit: positive int, max 100\n- include_deleted: true/false\n- instrument_type enum: CE, EQ, FUT, PE\n- segment enum: INDICES, MCX-FUT, MCX-OPT, NCO-FUT, NFO-FUT, NFO-OPT\n- exchange enum: MCX, NCO, NFO\n- status enum: ACTIVE, INACTIVE\n- expiry: dd-mm-yy\n- search: token/symbol/name partial match"
           },
           "response": []
         },
@@ -429,7 +440,8 @@
                 "instruments",
                 "{{instrument_id}}"
               ]
-            }
+            },
+            "description": "Admin-only. Get instrument by UUID instrument_id."
           },
           "response": []
         },
@@ -460,7 +472,8 @@
                 "admin",
                 "instruments"
               ]
-            }
+            },
+            "description": "Admin-only. Create new instrument.\nstatus allowed: ACTIVE or INACTIVE\nexpiry format: dd-mm-yy or empty"
           },
           "response": []
         },
@@ -492,7 +505,8 @@
                 "instruments",
                 "{{instrument_id}}"
               ]
-            }
+            },
+            "description": "Admin-only. Update instrument fields by UUID instrument_id.\nAt least one field required in body."
           },
           "response": []
         },
@@ -516,7 +530,8 @@
                 "instruments",
                 "{{instrument_id}}"
               ]
-            }
+            },
+            "description": "Admin-only. Soft delete instrument (is_deleted=true, status=INACTIVE)."
           },
           "response": []
         },
@@ -598,7 +613,8 @@
                 "admin",
                 "stats"
               ]
-            }
+            },
+            "description": "Admin-only. Returns overall system stats (users and connected clients)."
           },
           "response": []
         }

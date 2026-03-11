@@ -138,6 +138,14 @@ func (uc *UserController) Login(c *fiber.Ctx) error {
 			"api_token":          user.APIToken,
 			"token_generated_at": user.TokenGeneratedAt,
 		},
+		"user": fiber.Map{
+			"id":         user.ID,
+			"username":   user.Username,
+			"role":       user.EffectiveRole(),
+			"is_active":  user.IsActive,
+			"created_at": user.CreatedAt,
+			"updated_at": user.UpdatedAt,
+		},
 	})
 }
 
