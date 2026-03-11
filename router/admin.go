@@ -16,5 +16,7 @@ func RegisterAdminRoutes(app *fiber.App, adminController *controller.AdminContro
 	adminRoutes.Get("/users/:id", adminController.GetUser)
 	adminRoutes.Put("/users/:id/status", validator.ValidateUpdateStatus, adminController.UpdateUserStatus)
 	adminRoutes.Delete("/users/:id", adminController.DeleteUser)
+	adminRoutes.Post("/logout", adminController.Logout)
+	adminRoutes.Post("/change-password", validator.ValidateAdminChangePassword, adminController.ChangePassword)
 	adminRoutes.Get("/stats", adminController.GetStats)
 }

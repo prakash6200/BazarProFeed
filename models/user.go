@@ -74,10 +74,19 @@ func (u *User) RefreshToken(db *gorm.DB) error {
 		return err
 	}
 
-	u.APIToken = newToken
-	u.TokenGeneratedAt = time.Now()
+	newGeneratedAt := time.Now()
 
-	return db.Save(u).Error
+	if err := db.Model(&User{}).Where("id = ?", u.ID).Updates(map[string]any{
+		"api_token":          newToken,
+		"token_generated_at": newGeneratedAt,
+	}).Error; err != nil {
+		return err
+	}
+
+	u.APIToken = newToken
+	u.TokenGeneratedAt = newGeneratedAt
+
+	return nil
 }
 
 func CreateUser(db *gorm.DB, username, role string) (*User, error) {

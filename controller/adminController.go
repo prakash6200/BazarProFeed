@@ -225,6 +225,94 @@ func (ac *AdminController) DeleteUser(c *fiber.Ctx) error {
 	})
 }
 
+func (ac *AdminController) Logout(c *fiber.Ctx) error {
+	user, ok := c.Locals("user").(*models.User)
+	if !ok || user == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"status_code": fiber.StatusUnauthorized,
+			"message":     "invalid authenticated user",
+			"error":       "invalid authenticated user",
+		})
+	}
+
+	ac.socketHub.CloseUserConnections(user.ID)
+
+	if err := user.RefreshToken(ac.db); err != nil {
+		log.Printf("error logging out admin %s: %v", user.Username, err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to logout",
+			"error":       "failed to logout",
+		})
+	}
+
+	log.Printf("admin logged out: username=%s, id=%s", user.Username, user.ID)
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"message":     "logout successful",
+	})
+}
+
+func (ac *AdminController) ChangePassword(c *fiber.Ctx) error {
+	req := c.Locals("validated_request").(validator.AdminChangePasswordRequest)
+
+	user, ok := c.Locals("user").(*models.User)
+	if !ok || user == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"status_code": fiber.StatusUnauthorized,
+			"message":     "invalid authenticated user",
+			"error":       "invalid authenticated user",
+		})
+	}
+
+	if user.PasswordHash == "" || !models.CheckPasswordHash(req.CurrentPassword, user.PasswordHash) {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"status_code": fiber.StatusUnauthorized,
+			"message":     "invalid current_password",
+			"error":       "invalid current_password",
+		})
+	}
+
+	newPasswordHash, err := models.HashPassword(req.NewPassword)
+	if err != nil {
+		log.Printf("error hashing new password for admin %s: %v", user.Username, err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to update password",
+			"error":       "failed to update password",
+		})
+	}
+
+	err = ac.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.User{}).Where("id = ?", user.ID).Update("password_hash", newPasswordHash).Error; err != nil {
+			return err
+		}
+
+		if err := user.RefreshToken(tx); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		log.Printf("error changing password for admin %s: %v", user.Username, err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to change password",
+			"error":       "failed to change password",
+		})
+	}
+
+	ac.socketHub.CloseUserConnections(user.ID)
+	log.Printf("admin password changed: username=%s, id=%s", user.Username, user.ID)
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"message":     "password changed successfully, please login again",
+	})
+}
+
 func (ac *AdminController) GetStats(c *fiber.Ctx) error {
 
 	var totalUsers int64

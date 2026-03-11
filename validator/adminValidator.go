@@ -14,6 +14,11 @@ type UpdateStatusRequest struct {
 	IsActive bool `json:"is_active"`
 }
 
+type AdminChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
 func ValidateCreateUser(c *fiber.Ctx) error {
 	var req CreateUserRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -60,6 +65,47 @@ func ValidateUpdateStatus(c *fiber.Ctx) error {
 			"status_code": fiber.StatusBadRequest,
 			"message":     "invalid request body",
 			"error":       "invalid request body",
+		})
+	}
+
+	c.Locals("validated_request", req)
+	return c.Next()
+}
+
+func ValidateAdminChangePassword(c *fiber.Ctx) error {
+	var req AdminChangePasswordRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
+			"error":       "invalid request body",
+		})
+	}
+
+	req.CurrentPassword = strings.TrimSpace(req.CurrentPassword)
+	req.NewPassword = strings.TrimSpace(req.NewPassword)
+
+	if req.CurrentPassword == "" || req.NewPassword == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "current_password and new_password are required",
+			"error":       "current_password and new_password are required",
+		})
+	}
+
+	if len(req.NewPassword) < 6 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "new_password must be at least 6 characters",
+			"error":       "new_password must be at least 6 characters",
+		})
+	}
+
+	if req.CurrentPassword == req.NewPassword {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "new_password must be different from current_password",
+			"error":       "new_password must be different from current_password",
 		})
 	}
 

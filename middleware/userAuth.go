@@ -127,6 +127,14 @@ func UserAuth(db *gorm.DB) fiber.Handler {
 			})
 		}
 
+		if claims.IssuedAt == nil || claims.IssuedAt.Unix() < user.TokenGeneratedAt.Unix() {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"status_code": fiber.StatusUnauthorized,
+				"message":     "token has been revoked, please login again",
+				"error":       "token has been revoked, please login again",
+			})
+		}
+
 		c.Locals("user", user)
 		c.Locals("jwt_claims", claims)
 
