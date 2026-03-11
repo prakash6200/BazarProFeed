@@ -55,6 +55,7 @@ func UserAuth(db *gorm.DB) fiber.Handler {
 		if authHeader == "" {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"status_code": fiber.StatusUnauthorized,
+				"message":     "authorization token required",
 				"error":       "authorization token required",
 			})
 		}
@@ -63,6 +64,7 @@ func UserAuth(db *gorm.DB) fiber.Handler {
 		if len(parts) != 2 || parts[0] != "Bearer" {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"status_code": fiber.StatusUnauthorized,
+				"message":     "invalid authorization format, use: Bearer <token>",
 				"error":       "invalid authorization format, use: Bearer <token>",
 			})
 		}
@@ -72,6 +74,7 @@ func UserAuth(db *gorm.DB) fiber.Handler {
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"status_code": fiber.StatusInternalServerError,
+				"message":     "jwt authentication is not configured",
 				"error":       "jwt authentication is not configured",
 			})
 		}
@@ -87,6 +90,7 @@ func UserAuth(db *gorm.DB) fiber.Handler {
 		if err != nil || !parsedToken.Valid {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"status_code": fiber.StatusUnauthorized,
+				"message":     "invalid jwt token",
 				"error":       "invalid jwt token",
 			})
 		}
@@ -94,6 +98,7 @@ func UserAuth(db *gorm.DB) fiber.Handler {
 		if claims.UserID == "" {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"status_code": fiber.StatusUnauthorized,
+				"message":     "invalid jwt claims",
 				"error":       "invalid jwt claims",
 			})
 		}
@@ -103,11 +108,13 @@ func UserAuth(db *gorm.DB) fiber.Handler {
 			if err == gorm.ErrRecordNotFound {
 				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 					"status_code": fiber.StatusUnauthorized,
+					"message":     "invalid token",
 					"error":       "invalid token",
 				})
 			}
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"status_code": fiber.StatusInternalServerError,
+				"message":     "authentication failed",
 				"error":       "authentication failed",
 			})
 		}
@@ -115,6 +122,7 @@ func UserAuth(db *gorm.DB) fiber.Handler {
 		if !user.IsActive {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 				"status_code": fiber.StatusForbidden,
+				"message":     "user account is disabled",
 				"error":       "user account is disabled",
 			})
 		}
@@ -132,6 +140,7 @@ func AdminOnlyAuth(c *fiber.Ctx) error {
 	if !ok {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"status_code": fiber.StatusUnauthorized,
+			"message":     "invalid jwt claims",
 			"error":       "invalid jwt claims",
 		})
 	}
@@ -141,6 +150,7 @@ func AdminOnlyAuth(c *fiber.Ctx) error {
 	if !ok || user == nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"status_code": fiber.StatusUnauthorized,
+			"message":     "invalid authenticated user",
 			"error":       "invalid authenticated user",
 		})
 	}
@@ -148,6 +158,7 @@ func AdminOnlyAuth(c *fiber.Ctx) error {
 	if !user.IsAdminRole() {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 			"status_code": fiber.StatusForbidden,
+			"message":     "admin access required",
 			"error":       "admin access required",
 		})
 	}

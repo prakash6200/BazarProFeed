@@ -57,6 +57,15 @@ type CSVImportResult struct {
 	Skipped   int `json:"skipped"`
 }
 
+type InstrumentListFilters struct {
+	InstrumentType string
+	Segment        string
+	Exchange       string
+	Status         string
+	ExpiryDate     string
+	Search         string
+}
+
 func parseCSVInt64(value string) (int64, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -295,10 +304,41 @@ func GetInstrumentByIDIncludingDeleted(db *gorm.DB, id string) (*Instrument, err
 	return &instrument, err
 }
 
-func GetInstrumentsPaginated(db *gorm.DB, page, limit int, includeDeleted bool) ([]Instrument, int64, error) {
+func GetInstrumentsPaginated(db *gorm.DB, page, limit int, includeDeleted bool, filters InstrumentListFilters) ([]Instrument, int64, error) {
 	query := db.Model(&Instrument{})
 	if !includeDeleted {
 		query = query.Where("is_deleted = ?", false)
+	}
+
+	if strings.TrimSpace(filters.InstrumentType) != "" {
+		query = query.Where("UPPER(instrument_type) = ?", strings.ToUpper(strings.TrimSpace(filters.InstrumentType)))
+	}
+
+	if strings.TrimSpace(filters.Segment) != "" {
+		query = query.Where("UPPER(segment) = ?", strings.ToUpper(strings.TrimSpace(filters.Segment)))
+	}
+
+	if strings.TrimSpace(filters.Exchange) != "" {
+		query = query.Where("UPPER(exchange) = ?", strings.ToUpper(strings.TrimSpace(filters.Exchange)))
+	}
+
+	if strings.TrimSpace(filters.Status) != "" {
+		query = query.Where("status = ?", NormalizeInstrumentStatus(filters.Status))
+	}
+
+	if strings.TrimSpace(filters.ExpiryDate) != "" {
+		query = query.Where("DATE(expiry) = ?", strings.TrimSpace(filters.ExpiryDate))
+	}
+
+	if strings.TrimSpace(filters.Search) != "" {
+		searchPattern := "%" + strings.TrimSpace(filters.Search) + "%"
+		query = query.Where(
+			"CAST(instrument_token AS TEXT) ILIKE ? OR CAST(exchange_token AS TEXT) ILIKE ? OR trading_symbol ILIKE ? OR name ILIKE ?",
+			searchPattern,
+			searchPattern,
+			searchPattern,
+			searchPattern,
+		)
 	}
 
 	var total int64

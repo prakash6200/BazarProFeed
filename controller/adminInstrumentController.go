@@ -42,6 +42,7 @@ func (ic *AdminInstrumentController) ImportInstruments(c *fiber.Ctx) error {
 		log.Printf("error importing instruments from csv %s: %v", req.FilePath, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to import instruments",
 			"error":       "failed to import instruments",
 		})
 	}
@@ -59,12 +60,21 @@ func (ic *AdminInstrumentController) GetInstruments(c *fiber.Ctx) error {
 	page := query.Page
 	limit := query.Limit
 	includeDeleted := query.IncludeDeleted
+	filters := models.InstrumentListFilters{
+		InstrumentType: query.InstrumentType,
+		Segment:        query.Segment,
+		Exchange:       query.Exchange,
+		Status:         query.Status,
+		ExpiryDate:     query.ExpiryDate,
+		Search:         query.Search,
+	}
 
-	instruments, total, err := models.GetInstrumentsPaginated(ic.db, page, limit, includeDeleted)
+	instruments, total, err := models.GetInstrumentsPaginated(ic.db, page, limit, includeDeleted, filters)
 	if err != nil {
 		log.Printf("error fetching paginated instruments: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch instruments",
 			"error":       "failed to fetch instruments",
 		})
 	}
@@ -76,6 +86,7 @@ func (ic *AdminInstrumentController) GetInstruments(c *fiber.Ctx) error {
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status_code": fiber.StatusOK,
+		"message":     "instruments fetched successfully",
 		"instruments": instruments,
 		"pagination": fiber.Map{
 			"page":            page,
@@ -83,6 +94,14 @@ func (ic *AdminInstrumentController) GetInstruments(c *fiber.Ctx) error {
 			"total_records":   total,
 			"total_pages":     totalPages,
 			"include_deleted": includeDeleted,
+			"filters": fiber.Map{
+				"instrument_type": filters.InstrumentType,
+				"segment":         filters.Segment,
+				"exchange":        filters.Exchange,
+				"status":          filters.Status,
+				"expiry":          filters.ExpiryDate,
+				"search":          filters.Search,
+			},
 		},
 	})
 }
@@ -95,17 +114,20 @@ func (ic *AdminInstrumentController) GetInstrument(c *fiber.Ctx) error {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"status_code": fiber.StatusNotFound,
+				"message":     "instrument not found",
 				"error":       "instrument not found",
 			})
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch instrument",
 			"error":       "failed to fetch instrument",
 		})
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status_code": fiber.StatusOK,
+		"message":     "instrument fetched successfully",
 		"instrument":  instrument,
 	})
 }
@@ -117,6 +139,7 @@ func (ic *AdminInstrumentController) CreateInstrument(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "expiry must be in dd-mm-yy format",
 			"error":       "expiry must be in dd-mm-yy format",
 		})
 	}
@@ -141,6 +164,7 @@ func (ic *AdminInstrumentController) CreateInstrument(c *fiber.Ctx) error {
 		log.Printf("error creating instrument: %v", err)
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
 			"status_code": fiber.StatusConflict,
+			"message":     "failed to create instrument",
 			"error":       "failed to create instrument",
 		})
 	}
@@ -160,11 +184,13 @@ func (ic *AdminInstrumentController) UpdateInstrument(c *fiber.Ctx) error {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"status_code": fiber.StatusNotFound,
+				"message":     "instrument not found",
 				"error":       "instrument not found",
 			})
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch instrument",
 			"error":       "failed to fetch instrument",
 		})
 	}
@@ -190,6 +216,7 @@ func (ic *AdminInstrumentController) UpdateInstrument(c *fiber.Ctx) error {
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"status_code": fiber.StatusBadRequest,
+				"message":     "expiry must be in dd-mm-yy format",
 				"error":       "expiry must be in dd-mm-yy format",
 			})
 		}
@@ -221,6 +248,7 @@ func (ic *AdminInstrumentController) UpdateInstrument(c *fiber.Ctx) error {
 		log.Printf("error updating instrument %s: %v", instrumentID, err)
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
 			"status_code": fiber.StatusConflict,
+			"message":     "failed to update instrument",
 			"error":       "failed to update instrument",
 		})
 	}
@@ -229,6 +257,7 @@ func (ic *AdminInstrumentController) UpdateInstrument(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch updated instrument",
 			"error":       "failed to fetch updated instrument",
 		})
 	}
@@ -247,11 +276,13 @@ func (ic *AdminInstrumentController) DeleteInstrument(c *fiber.Ctx) error {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"status_code": fiber.StatusNotFound,
+				"message":     "instrument not found",
 				"error":       "instrument not found",
 			})
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch instrument",
 			"error":       "failed to fetch instrument",
 		})
 	}
@@ -260,6 +291,7 @@ func (ic *AdminInstrumentController) DeleteInstrument(c *fiber.Ctx) error {
 		log.Printf("error deleting instrument %s: %v", instrumentID, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to soft delete instrument",
 			"error":       "failed to soft delete instrument",
 		})
 	}

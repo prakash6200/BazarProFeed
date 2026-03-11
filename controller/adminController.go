@@ -30,12 +30,14 @@ func (ac *AdminController) CreateUser(c *fiber.Ctx) error {
 	if err := ac.db.Where("username = ?", req.Username).First(&existingUser).Error; err == nil {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
 			"status_code": fiber.StatusConflict,
+			"message":     "username already exists",
 			"error":       "username already exists",
 		})
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		log.Printf("error checking existing username: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to validate username",
 			"error":       "failed to validate username",
 		})
 	}
@@ -45,6 +47,7 @@ func (ac *AdminController) CreateUser(c *fiber.Ctx) error {
 		log.Printf("error creating user: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to create user",
 			"error":       "failed to create user",
 		})
 	}
@@ -71,6 +74,7 @@ func (ac *AdminController) GetAllUsers(c *fiber.Ctx) error {
 		log.Printf("error fetching users: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch users",
 			"error":       "failed to fetch users",
 		})
 	}
@@ -90,6 +94,7 @@ func (ac *AdminController) GetAllUsers(c *fiber.Ctx) error {
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status_code": fiber.StatusOK,
+		"message":     "users fetched successfully",
 		"users":       userList,
 		"count":       len(users),
 	})
@@ -103,18 +108,21 @@ func (ac *AdminController) GetUser(c *fiber.Ctx) error {
 		if err == gorm.ErrRecordNotFound {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"status_code": fiber.StatusNotFound,
+				"message":     "user not found",
 				"error":       "user not found",
 			})
 		}
 		log.Printf("error fetching user: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch user",
 			"error":       "failed to fetch user",
 		})
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status_code": fiber.StatusOK,
+		"message":     "user fetched successfully",
 		"user": fiber.Map{
 			"id":                 user.ID,
 			"username":           user.Username,
@@ -137,11 +145,13 @@ func (ac *AdminController) UpdateUserStatus(c *fiber.Ctx) error {
 		if err == gorm.ErrRecordNotFound {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"status_code": fiber.StatusNotFound,
+				"message":     "user not found",
 				"error":       "user not found",
 			})
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch user",
 			"error":       "failed to fetch user",
 		})
 	}
@@ -150,6 +160,7 @@ func (ac *AdminController) UpdateUserStatus(c *fiber.Ctx) error {
 		log.Printf("error updating user status: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to update user status",
 			"error":       "failed to update user status",
 		})
 	}
@@ -176,11 +187,13 @@ func (ac *AdminController) DeleteUser(c *fiber.Ctx) error {
 		if err == gorm.ErrRecordNotFound {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"status_code": fiber.StatusNotFound,
+				"message":     "user not found",
 				"error":       "user not found",
 			})
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch user",
 			"error":       "failed to fetch user",
 		})
 	}
@@ -188,6 +201,7 @@ func (ac *AdminController) DeleteUser(c *fiber.Ctx) error {
 	if user.IsAdminRole() {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 			"status_code": fiber.StatusForbidden,
+			"message":     "cannot delete admin user",
 			"error":       "cannot delete admin user",
 		})
 	}
@@ -198,6 +212,7 @@ func (ac *AdminController) DeleteUser(c *fiber.Ctx) error {
 		log.Printf("error deleting user: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to delete user",
 			"error":       "failed to delete user",
 		})
 	}
@@ -222,6 +237,7 @@ func (ac *AdminController) GetStats(c *fiber.Ctx) error {
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status_code": fiber.StatusOK,
+		"message":     "stats fetched successfully",
 		"stats": fiber.Map{
 			"total_users":       totalUsers,
 			"active_users":      activeUsers,

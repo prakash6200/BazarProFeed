@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -52,6 +53,12 @@ type InstrumentListQueryRequest struct {
 	Page           int
 	Limit          int
 	IncludeDeleted bool
+	InstrumentType string
+	Segment        string
+	Exchange       string
+	Status         string
+	ExpiryDate     string
+	Search         string
 }
 
 var instrumentIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
@@ -61,6 +68,7 @@ func ValidateCreateInstrument(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
 			"error":       "invalid request body",
 		})
 	}
@@ -76,6 +84,7 @@ func ValidateCreateInstrument(c *fiber.Ctx) error {
 	if req.InstrumentToken <= 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "instrument_token must be greater than 0",
 			"error":       "instrument_token must be greater than 0",
 		})
 	}
@@ -83,6 +92,7 @@ func ValidateCreateInstrument(c *fiber.Ctx) error {
 	if req.ExchangeToken <= 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "exchange_token must be greater than 0",
 			"error":       "exchange_token must be greater than 0",
 		})
 	}
@@ -90,6 +100,7 @@ func ValidateCreateInstrument(c *fiber.Ctx) error {
 	if req.TradingSymbol == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "tradingsymbol is required",
 			"error":       "tradingsymbol is required",
 		})
 	}
@@ -99,6 +110,7 @@ func ValidateCreateInstrument(c *fiber.Ctx) error {
 		if status != "ACTIVE" && status != "INACTIVE" {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"status_code": fiber.StatusBadRequest,
+				"message":     "status must be ACTIVE or INACTIVE",
 				"error":       "status must be ACTIVE or INACTIVE",
 			})
 		}
@@ -114,6 +126,7 @@ func ValidateUpdateInstrument(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
 			"error":       "invalid request body",
 		})
 	}
@@ -170,6 +183,7 @@ func ValidateUpdateInstrument(c *fiber.Ctx) error {
 	if !hasAnyField {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "at least one field is required to update",
 			"error":       "at least one field is required to update",
 		})
 	}
@@ -177,6 +191,7 @@ func ValidateUpdateInstrument(c *fiber.Ctx) error {
 	if req.InstrumentToken != nil && *req.InstrumentToken <= 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "instrument_token must be greater than 0",
 			"error":       "instrument_token must be greater than 0",
 		})
 	}
@@ -184,6 +199,7 @@ func ValidateUpdateInstrument(c *fiber.Ctx) error {
 	if req.ExchangeToken != nil && *req.ExchangeToken <= 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "exchange_token must be greater than 0",
 			"error":       "exchange_token must be greater than 0",
 		})
 	}
@@ -191,6 +207,7 @@ func ValidateUpdateInstrument(c *fiber.Ctx) error {
 	if req.Status != nil && *req.Status != "ACTIVE" && *req.Status != "INACTIVE" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "status must be ACTIVE or INACTIVE",
 			"error":       "status must be ACTIVE or INACTIVE",
 		})
 	}
@@ -205,6 +222,7 @@ func ValidateImportInstruments(c *fiber.Ctx) error {
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"status_code": fiber.StatusBadRequest,
+				"message":     "invalid request body",
 				"error":       "invalid request body",
 			})
 		}
@@ -224,6 +242,7 @@ func ValidateInstrumentID(c *fiber.Ctx) error {
 	if id == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "instrument id is required",
 			"error":       "instrument id is required",
 		})
 	}
@@ -231,6 +250,7 @@ func ValidateInstrumentID(c *fiber.Ctx) error {
 	if !instrumentIDPattern.MatchString(id) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid instrument id format",
 			"error":       "invalid instrument id format",
 		})
 	}
@@ -246,6 +266,7 @@ func ValidateListInstrumentsQuery(c *fiber.Ctx) error {
 		if err != nil || parsed < 1 {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"status_code": fiber.StatusBadRequest,
+				"message":     "page must be a positive integer",
 				"error":       "page must be a positive integer",
 			})
 		}
@@ -258,12 +279,14 @@ func ValidateListInstrumentsQuery(c *fiber.Ctx) error {
 		if err != nil || parsed < 1 {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"status_code": fiber.StatusBadRequest,
+				"message":     "limit must be a positive integer",
 				"error":       "limit must be a positive integer",
 			})
 		}
 		if parsed > 100 {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"status_code": fiber.StatusBadRequest,
+				"message":     "limit must be less than or equal to 100",
 				"error":       "limit must be less than or equal to 100",
 			})
 		}
@@ -276,16 +299,51 @@ func ValidateListInstrumentsQuery(c *fiber.Ctx) error {
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"status_code": fiber.StatusBadRequest,
+				"message":     "include_deleted must be true or false",
 				"error":       "include_deleted must be true or false",
 			})
 		}
 		includeDeleted = parsed
 	}
 
+	instrumentType := strings.ToUpper(strings.TrimSpace(c.Query("instrument_type")))
+	segment := strings.ToUpper(strings.TrimSpace(c.Query("segment")))
+	exchange := strings.ToUpper(strings.TrimSpace(c.Query("exchange")))
+	status := strings.ToUpper(strings.TrimSpace(c.Query("status")))
+	expiry := strings.TrimSpace(c.Query("expiry"))
+	search := strings.TrimSpace(c.Query("search"))
+
+	if status != "" && status != "ACTIVE" && status != "INACTIVE" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "status must be ACTIVE or INACTIVE",
+			"error":       "status must be ACTIVE or INACTIVE",
+		})
+	}
+
+	expiryDate := ""
+	if expiry != "" {
+		parsedExpiry, err := time.Parse("02-01-06", expiry)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "expiry must be in dd-mm-yy format",
+				"error":       "expiry must be in dd-mm-yy format",
+			})
+		}
+		expiryDate = parsedExpiry.Format("2006-01-02")
+	}
+
 	c.Locals("validated_instrument_list_query", InstrumentListQueryRequest{
 		Page:           page,
 		Limit:          limit,
 		IncludeDeleted: includeDeleted,
+		InstrumentType: instrumentType,
+		Segment:        segment,
+		Exchange:       exchange,
+		Status:         status,
+		ExpiryDate:     expiryDate,
+		Search:         search,
 	})
 
 	return c.Next()

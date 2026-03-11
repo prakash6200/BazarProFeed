@@ -25,6 +25,7 @@ func ValidateRefreshToken(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
 			"error":       "invalid request body",
 		})
 	}
@@ -33,6 +34,7 @@ func ValidateRefreshToken(c *fiber.Ctx) error {
 	if req.OldToken == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "old_token is required",
 			"error":       "old_token is required",
 		})
 	}
@@ -46,6 +48,7 @@ func ValidateSignup(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
 			"error":       "invalid request body",
 		})
 	}
@@ -54,6 +57,7 @@ func ValidateSignup(c *fiber.Ctx) error {
 	if req.Username == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "username is required",
 			"error":       "username is required",
 		})
 	}
@@ -61,6 +65,7 @@ func ValidateSignup(c *fiber.Ctx) error {
 	if len(req.Username) < 3 || len(req.Username) > 50 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "username must be between 3 and 50 characters",
 			"error":       "username must be between 3 and 50 characters",
 		})
 	}
@@ -68,6 +73,7 @@ func ValidateSignup(c *fiber.Ctx) error {
 	if len(req.Password) < 6 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "password must be at least 6 characters",
 			"error":       "password must be at least 6 characters",
 		})
 	}
@@ -81,6 +87,7 @@ func ValidateLogin(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
 			"error":       "invalid request body",
 		})
 	}
@@ -89,6 +96,7 @@ func ValidateLogin(c *fiber.Ctx) error {
 	if req.Username == "" || req.Password == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "username and password are required",
 			"error":       "username and password are required",
 		})
 	}

@@ -19,6 +19,7 @@ func ValidateCreateUser(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
 			"error":       "invalid request body",
 		})
 	}
@@ -27,6 +28,7 @@ func ValidateCreateUser(c *fiber.Ctx) error {
 	if req.Username == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "username is required",
 			"error":       "username is required",
 		})
 	}
@@ -34,6 +36,7 @@ func ValidateCreateUser(c *fiber.Ctx) error {
 	if len(req.Username) < 3 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "username must be at least 3 characters",
 			"error":       "username must be at least 3 characters",
 		})
 	}
@@ -41,6 +44,7 @@ func ValidateCreateUser(c *fiber.Ctx) error {
 	if len(req.Username) > 50 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "username must not exceed 50 characters",
 			"error":       "username must not exceed 50 characters",
 		})
 	}
@@ -54,6 +58,7 @@ func ValidateUpdateStatus(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
 			"error":       "invalid request body",
 		})
 	}

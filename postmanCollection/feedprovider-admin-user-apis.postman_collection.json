@@ -317,6 +317,210 @@
           "response": []
         },
         {
+          "name": "Import Instruments CSV",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"file_path\": \"instruments.csv\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/instruments/import",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "instruments",
+                "import"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Instruments (Paginated)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/instruments?page=1&limit=20&include_deleted=false&instrument_type=PE&segment=NFO-OPT&exchange=NFO&status=ACTIVE&expiry=11-03-26&search=VBL",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "instruments"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "include_deleted",
+                  "value": "false"
+                },
+                {
+                  "key": "instrument_type",
+                  "value": "PE"
+                },
+                {
+                  "key": "segment",
+                  "value": "NFO-OPT"
+                },
+                {
+                  "key": "exchange",
+                  "value": "NFO"
+                },
+                {
+                  "key": "status",
+                  "value": "ACTIVE"
+                },
+                {
+                  "key": "expiry",
+                  "value": "11-03-26"
+                },
+                {
+                  "key": "search",
+                  "value": "VBL"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Instrument By ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/instruments/{{instrument_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "instruments",
+                "{{instrument_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Instrument",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"instrument_token\": 999999001,\n  \"exchange_token\": 999001,\n  \"tradingsymbol\": \"DEMOINSTR\",\n  \"name\": \"DEMO INSTRUMENT\",\n  \"last_price\": 0,\n  \"expiry\": \"\",\n  \"strike\": 0,\n  \"tick_size\": 0.05,\n  \"lot_size\": 1,\n  \"instrument_type\": \"FUT\",\n  \"segment\": \"MCX-FUT\",\n  \"exchange\": \"MCX\",\n  \"status\": \"ACTIVE\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/instruments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "instruments"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Instrument",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"instrument_token\": 999999001,\n  \"exchange_token\": 999001,\n  \"tradingsymbol\": \"DEMOINSTR\",\n  \"name\": \"UPDATED DEMO INSTRUMENT\",\n  \"last_price\": 0,\n  \"expiry\": \"\",\n  \"strike\": 0,\n  \"tick_size\": 0.05,\n  \"lot_size\": 1,\n  \"instrument_type\": \"FUT\",\n  \"segment\": \"MCX-FUT\",\n  \"exchange\": \"MCX\",\n  \"status\": \"ACTIVE\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/instruments/{{instrument_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "instruments",
+                "{{instrument_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Soft Delete Instrument",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/instruments/{{instrument_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "instruments",
+                "{{instrument_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
           "name": "Get Admin Stats",
           "request": {
             "method": "GET",
@@ -370,6 +574,11 @@
     },
     {
       "key": "user_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "instrument_id",
       "value": "",
       "type": "string"
     }
