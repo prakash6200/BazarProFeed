@@ -28,7 +28,8 @@ type Instrument struct {
 	InstrumentType  string     `json:"instrument_type"`
 	Segment         string     `json:"segment"`
 	Exchange        string     `json:"exchange"`
-	Status          string     `gorm:"type:varchar(10);not null;default:'ACTIVE';index" json:"status"`
+	Status          string     `gorm:"type:instrument_status;not null;default:'ACTIVE';index" json:"status"`
+	IsDeleted       bool       `gorm:"not null;default:false;index" json:"is_deleted"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
@@ -187,6 +188,7 @@ func parseInstrumentCSVRecord(record []string) (*Instrument, error) {
 		Segment:         strings.TrimSpace(record[10]),
 		Exchange:        strings.TrimSpace(record[11]),
 		Status:          InstrumentStatusActive,
+		IsDeleted:       false,
 	}, nil
 }
 
@@ -230,6 +232,8 @@ func ImportInstrumentsFromCSV(db *gorm.DB, csvPath string) (*CSVImportResult, er
 				"instrument_type",
 				"segment",
 				"exchange",
+				"status",
+				"is_deleted",
 				"updated_at",
 			}),
 		}).Create(&rows).Error; err != nil {
@@ -275,19 +279,45 @@ func ImportInstrumentsFromCSV(db *gorm.DB, csvPath string) (*CSVImportResult, er
 
 func CreateInstrument(db *gorm.DB, instrument *Instrument) error {
 	instrument.Status = NormalizeInstrumentStatus(instrument.Status)
+	instrument.IsDeleted = false
 	return db.Create(instrument).Error
 }
 
 func GetInstrumentByID(db *gorm.DB, id string) (*Instrument, error) {
 	var instrument Instrument
-	err := db.First(&instrument, "id = ?", id).Error
+	err := db.Where("id = ? AND is_deleted = ?", id, false).First(&instrument).Error
 	return &instrument, err
 }
 
-func UpdateInstrumentFields(db *gorm.DB, id string, updates map[string]interface{}) error {
-	return db.Model(&Instrument{}).Where("id = ?", id).Updates(updates).Error
+func GetInstrumentByIDIncludingDeleted(db *gorm.DB, id string) (*Instrument, error) {
+	var instrument Instrument
+	err := db.Where("id = ?", id).First(&instrument).Error
+	return &instrument, err
 }
 
-func DeleteInstrumentByID(db *gorm.DB, id string) error {
-	return db.Delete(&Instrument{}, "id = ?", id).Error
+func GetInstrumentsPaginated(db *gorm.DB, page, limit int, includeDeleted bool) ([]Instrument, int64, error) {
+	query := db.Model(&Instrument{})
+	if !includeDeleted {
+		query = query.Where("is_deleted = ?", false)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var instruments []Instrument
+	offset := (page - 1) * limit
+	err := query.Order("created_at DESC").Offset(offset).Limit(limit).Find(&instruments).Error
+	return instruments, total, err
+}
+
+func UpdateInstrumentFields(db *gorm.DB, id string, updates map[string]interface{}) error {
+	return db.Model(&Instrument{}).Where("id = ? AND is_deleted = ?", id, false).Updates(updates).Error
+}
+
+func SoftDeleteInstrumentByID(db *gorm.DB, id string) error {
+	return db.Model(&Instrument{}).
+		Where("id = ? AND is_deleted = ?", id, false).
+		Updates(map[string]interface{}{"is_deleted": true, "status": InstrumentStatusInactive}).Error
 }

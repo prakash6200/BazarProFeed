@@ -54,6 +54,62 @@ func (ic *AdminInstrumentController) ImportInstruments(c *fiber.Ctx) error {
 	})
 }
 
+func (ic *AdminInstrumentController) GetInstruments(c *fiber.Ctx) error {
+	query := c.Locals("validated_instrument_list_query").(validator.InstrumentListQueryRequest)
+	page := query.Page
+	limit := query.Limit
+	includeDeleted := query.IncludeDeleted
+
+	instruments, total, err := models.GetInstrumentsPaginated(ic.db, page, limit, includeDeleted)
+	if err != nil {
+		log.Printf("error fetching paginated instruments: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"error":       "failed to fetch instruments",
+		})
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(limit) - 1) / int64(limit))
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"instruments": instruments,
+		"pagination": fiber.Map{
+			"page":            page,
+			"limit":           limit,
+			"total_records":   total,
+			"total_pages":     totalPages,
+			"include_deleted": includeDeleted,
+		},
+	})
+}
+
+func (ic *AdminInstrumentController) GetInstrument(c *fiber.Ctx) error {
+	instrumentID := c.Locals("validated_instrument_id").(validator.InstrumentIDRequest).ID
+
+	instrument, err := models.GetInstrumentByID(ic.db, instrumentID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"status_code": fiber.StatusNotFound,
+				"error":       "instrument not found",
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"error":       "failed to fetch instrument",
+		})
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"instrument":  instrument,
+	})
+}
+
 func (ic *AdminInstrumentController) CreateInstrument(c *fiber.Ctx) error {
 	req := c.Locals("validated_request").(validator.CreateInstrumentRequest)
 
@@ -97,7 +153,7 @@ func (ic *AdminInstrumentController) CreateInstrument(c *fiber.Ctx) error {
 }
 
 func (ic *AdminInstrumentController) UpdateInstrument(c *fiber.Ctx) error {
-	instrumentID := c.Params("id")
+	instrumentID := c.Locals("validated_instrument_id").(validator.InstrumentIDRequest).ID
 	req := c.Locals("validated_request").(validator.UpdateInstrumentRequest)
 
 	if _, err := models.GetInstrumentByID(ic.db, instrumentID); err != nil {
@@ -185,7 +241,7 @@ func (ic *AdminInstrumentController) UpdateInstrument(c *fiber.Ctx) error {
 }
 
 func (ic *AdminInstrumentController) DeleteInstrument(c *fiber.Ctx) error {
-	instrumentID := c.Params("id")
+	instrumentID := c.Locals("validated_instrument_id").(validator.InstrumentIDRequest).ID
 
 	if _, err := models.GetInstrumentByID(ic.db, instrumentID); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -200,16 +256,16 @@ func (ic *AdminInstrumentController) DeleteInstrument(c *fiber.Ctx) error {
 		})
 	}
 
-	if err := models.DeleteInstrumentByID(ic.db, instrumentID); err != nil {
+	if err := models.SoftDeleteInstrumentByID(ic.db, instrumentID); err != nil {
 		log.Printf("error deleting instrument %s: %v", instrumentID, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
-			"error":       "failed to delete instrument",
+			"error":       "failed to soft delete instrument",
 		})
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status_code": fiber.StatusOK,
-		"message":     "instrument deleted successfully",
+		"message":     "instrument soft deleted successfully",
 	})
 }

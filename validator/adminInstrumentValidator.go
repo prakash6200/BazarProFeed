@@ -1,6 +1,8 @@
 package validator
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -41,6 +43,18 @@ type UpdateInstrumentRequest struct {
 type ImportInstrumentsRequest struct {
 	FilePath string `json:"file_path"`
 }
+
+type InstrumentIDRequest struct {
+	ID string
+}
+
+type InstrumentListQueryRequest struct {
+	Page           int
+	Limit          int
+	IncludeDeleted bool
+}
+
+var instrumentIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
 
 func ValidateCreateInstrument(c *fiber.Ctx) error {
 	var req CreateInstrumentRequest
@@ -202,5 +216,77 @@ func ValidateImportInstruments(c *fiber.Ctx) error {
 	}
 
 	c.Locals("validated_request", req)
+	return c.Next()
+}
+
+func ValidateInstrumentID(c *fiber.Ctx) error {
+	id := strings.TrimSpace(c.Params("id"))
+	if id == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"error":       "instrument id is required",
+		})
+	}
+
+	if !instrumentIDPattern.MatchString(id) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"error":       "invalid instrument id format",
+		})
+	}
+
+	c.Locals("validated_instrument_id", InstrumentIDRequest{ID: id})
+	return c.Next()
+}
+
+func ValidateListInstrumentsQuery(c *fiber.Ctx) error {
+	page := 1
+	if rawPage := strings.TrimSpace(c.Query("page")); rawPage != "" {
+		parsed, err := strconv.Atoi(rawPage)
+		if err != nil || parsed < 1 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"error":       "page must be a positive integer",
+			})
+		}
+		page = parsed
+	}
+
+	limit := 20
+	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed < 1 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"error":       "limit must be a positive integer",
+			})
+		}
+		if parsed > 100 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"error":       "limit must be less than or equal to 100",
+			})
+		}
+		limit = parsed
+	}
+
+	includeDeleted := false
+	if rawIncludeDeleted := strings.TrimSpace(c.Query("include_deleted")); rawIncludeDeleted != "" {
+		parsed, err := strconv.ParseBool(rawIncludeDeleted)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"error":       "include_deleted must be true or false",
+			})
+		}
+		includeDeleted = parsed
+	}
+
+	c.Locals("validated_instrument_list_query", InstrumentListQueryRequest{
+		Page:           page,
+		Limit:          limit,
+		IncludeDeleted: includeDeleted,
+	})
+
 	return c.Next()
 }

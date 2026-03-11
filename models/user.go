@@ -17,7 +17,7 @@ type User struct {
 	APIToken         string    `gorm:"uniqueIndex;not null" json:"api_token"`
 	TokenGeneratedAt time.Time `gorm:"not null" json:"token_generated_at"`
 	IsActive         bool      `gorm:"default:true" json:"is_active"`
-	Role             string    `gorm:"type:varchar(10);not null;default:'USER';index" json:"role"`
+	Role             string    `gorm:"type:user_role;not null;default:'USER';index" json:"role"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }

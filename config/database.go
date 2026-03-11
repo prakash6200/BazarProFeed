@@ -17,6 +17,123 @@ var (
 	dbMu sync.RWMutex
 )
 
+func ensureEnumTypes(db *gorm.DB) error {
+	createEnumsSQL := `
+DO $$
+BEGIN
+	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
+		CREATE TYPE user_role AS ENUM ('USER', 'ADMIN');
+	END IF;
+
+	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'instrument_status') THEN
+		CREATE TYPE instrument_status AS ENUM ('ACTIVE', 'INACTIVE');
+	END IF;
+END
+$$;`
+
+	if err := db.Exec(createEnumsSQL).Error; err != nil {
+		return err
+	}
+
+	convertUsersRoleSQL := `
+DO $$
+DECLARE
+	role_udt text;
+BEGIN
+	IF EXISTS (
+		SELECT 1
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'users'
+		  AND column_name = 'role'
+	) THEN
+		SELECT udt_name
+		INTO role_udt
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'users'
+		  AND column_name = 'role'
+		LIMIT 1;
+
+		IF role_udt = 'user_role' THEN
+			UPDATE users
+			SET role = 'USER'::user_role
+			WHERE role IS NULL OR UPPER(role::text) NOT IN ('USER', 'ADMIN');
+		ELSE
+			UPDATE users
+			SET role = 'USER'
+			WHERE role IS NULL OR UPPER(TRIM(role::text)) NOT IN ('USER', 'ADMIN');
+
+			ALTER TABLE users
+				ALTER COLUMN role DROP DEFAULT;
+
+			ALTER TABLE users
+				ALTER COLUMN role TYPE user_role
+				USING UPPER(TRIM(role::text))::user_role;
+		END IF;
+
+		ALTER TABLE users
+			ALTER COLUMN role SET DEFAULT 'USER';
+
+		ALTER TABLE users
+			ALTER COLUMN role SET NOT NULL;
+	END IF;
+END
+$$;`
+
+	if err := db.Exec(convertUsersRoleSQL).Error; err != nil {
+		return err
+	}
+
+	convertInstrumentStatusSQL := `
+DO $$
+DECLARE
+	status_udt text;
+BEGIN
+	IF EXISTS (
+		SELECT 1
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'instruments'
+		  AND column_name = 'status'
+	) THEN
+		SELECT udt_name
+		INTO status_udt
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'instruments'
+		  AND column_name = 'status'
+		LIMIT 1;
+
+		IF status_udt = 'instrument_status' THEN
+			UPDATE instruments
+			SET status = 'ACTIVE'::instrument_status
+			WHERE status IS NULL OR UPPER(status::text) NOT IN ('ACTIVE', 'INACTIVE');
+		ELSE
+			UPDATE instruments
+			SET status = 'ACTIVE'
+			WHERE status IS NULL OR UPPER(TRIM(status::text)) NOT IN ('ACTIVE', 'INACTIVE');
+
+			ALTER TABLE instruments
+				ALTER COLUMN status DROP DEFAULT;
+
+			ALTER TABLE instruments
+				ALTER COLUMN status TYPE instrument_status
+				USING UPPER(TRIM(status::text))::instrument_status;
+		END IF;
+
+		ALTER TABLE instruments
+			ALTER COLUMN status SET DEFAULT 'ACTIVE';
+
+		ALTER TABLE instruments
+			ALTER COLUMN status SET NOT NULL;
+	END IF;
+END
+$$;`
+
+	return db.Exec(convertInstrumentStatusSQL).Error
+}
+
 func ConnectDatabase() {
 	dbMu.Lock()
 	defer dbMu.Unlock()
@@ -57,9 +174,29 @@ func ConnectDatabase() {
 		log.Fatal("failed to ping database: ", err)
 	}
 
+	if err := ensureEnumTypes(db); err != nil {
+		_ = sqlDB.Close()
+		log.Fatal("failed to ensure enum types: ", err)
+	}
+
 	if err := db.AutoMigrate(&models.User{}, &models.Instrument{}); err != nil {
 		_ = sqlDB.Close()
 		log.Fatal("failed to run migrations: ", err)
+	}
+
+	if err := db.Exec(`
+UPDATE instruments
+SET is_deleted = false
+WHERE is_deleted IS NULL;
+
+ALTER TABLE instruments
+	ALTER COLUMN is_deleted SET DEFAULT false;
+
+ALTER TABLE instruments
+	ALTER COLUMN is_deleted SET NOT NULL;
+`).Error; err != nil {
+		_ = sqlDB.Close()
+		log.Fatal("failed to finalize soft delete migration: ", err)
 	}
 
 	DB = db

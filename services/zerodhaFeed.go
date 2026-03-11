@@ -785,7 +785,10 @@ func (s *ZerodhaFeedService) seedRegistryFromDatabase() {
 	}
 
 	var instruments []models.Instrument
-	if err := s.db.Select("instrument_token", "trading_symbol", "segment", "exchange").Find(&instruments).Error; err != nil {
+	if err := s.db.
+		Select("instrument_token", "trading_symbol", "segment", "exchange", "status", "is_deleted").
+		Where("is_deleted = ?", false).
+		Find(&instruments).Error; err != nil {
 		log.Printf("zerodha registry seed failed: %v", err)
 		return
 	}
