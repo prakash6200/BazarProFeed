@@ -92,6 +92,7 @@ func main() {
 	router.RegisterUserRoutes(app, userController, config.DB)
 
 	socketHub.RegisterRoutes(app, "/feed")
+	socketHub.RegisterSingleInstrumentRoutes(app, "/feed/one")
 
 	events, unsubscribe := tickHub.Subscribe(1024)
 	defer unsubscribe()
