@@ -15,6 +15,11 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	socketPingPeriod = 25 * time.Second
+	socketWriteWait  = 10 * time.Second
+)
+
 type socketClient struct {
 	conn      *ws.Conn
 	userToken string
@@ -86,6 +91,31 @@ func (h *SocketHub) RegisterRoutes(app *fiber.App, path string) {
 		h.addClient(client)
 		log.Printf("websocket client connected: user=%s, token=%s", user.Username, maskToken(token))
 		defer h.removeClient(client)
+
+		done := make(chan struct{})
+		defer close(done)
+
+		go func(conn *ws.Conn, writeMu *sync.Mutex, userName string, finished <-chan struct{}) {
+			ticker := time.NewTicker(socketPingPeriod)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-finished:
+					return
+				case <-ticker.C:
+					writeMu.Lock()
+					_ = conn.SetWriteDeadline(time.Now().Add(socketWriteWait))
+					err := conn.WriteControl(ws.PingMessage, []byte("ping"), time.Now().Add(socketWriteWait))
+					writeMu.Unlock()
+					if err != nil {
+						log.Printf("websocket heartbeat failed: user=%s err=%v", userName, err)
+						_ = conn.Close()
+						return
+					}
+				}
+			}
+		}(c, &client.mu, user.Username, done)
 
 		for {
 			if _, _, err := c.ReadMessage(); err != nil {

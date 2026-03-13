@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FeedProvider Live Tick Viewer</title>
+  <style>
+    :root {
+      --bg: #f4f1e8;
+      --card: #fffdf8;
+      --ink: #1f2421;
+      --muted: #5b635f;
+      --line: #ddd4bf;
+      --accent: #0f766e;
+      --accent-2: #b45309;
+      --good: #166534;
+      --bad: #b91c1c;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 15% 20%, #efe4cd 0%, transparent 35%),
+        radial-gradient(circle at 85% 15%, #e5edd6 0%, transparent 33%),
+        linear-gradient(135deg, #f4f1e8 0%, #f8f5ee 65%, #f1efe9 100%);
+      font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      min-height: 100vh;
+      padding: 28px;
+    }
+
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .hero {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+      animation: rise 360ms ease;
+    }
+
+    .title {
+      margin: 0;
+      font-size: 1.8rem;
+      letter-spacing: 0.3px;
+    }
+
+    .sub {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 0.96rem;
+    }
+
+    .controls {
+      margin-top: 18px;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1fr;
+    }
+
+    @media (min-width: 800px) {
+      .controls {
+        grid-template-columns: 2fr 2fr auto auto;
+      }
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    label {
+      font-size: 0.82rem;
+      color: var(--muted);
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+    }
+
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      border-radius: 10px;
+      height: 42px;
+      padding: 0 12px;
+      outline: none;
+      font-size: 0.94rem;
+    }
+
+    input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.15);
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      height: 42px;
+      padding: 0 16px;
+      font-size: 0.93rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 120ms ease, opacity 120ms ease;
+      margin-top: 22px;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+    }
+
+    .connect {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .disconnect {
+      background: #2d3748;
+      color: #fff;
+    }
+
+    .statusbar {
+      margin-top: 14px;
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 10px;
+      background: #fff;
+    }
+
+    .ok {
+      color: var(--good);
+      border-color: #bbf7d0;
+      background: #f0fdf4;
+    }
+
+    .err {
+      color: var(--bad);
+      border-color: #fecaca;
+      background: #fef2f2;
+    }
+
+    .grid {
+      margin-top: 16px;
+      display: grid;
+      gap: 14px;
+      grid-template-columns: 1fr;
+    }
+
+    @media (min-width: 980px) {
+      .grid {
+        grid-template-columns: 1.6fr 1fr;
+      }
+    }
+
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.05);
+      animation: rise 420ms ease;
+    }
+
+    .panel h2 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(90deg, #fffdf8, #f7f2e8);
+    }
+
+    .table-wrap {
+      max-height: 65vh;
+      overflow: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      text-align: left;
+      background: #f8f5ee;
+      border-bottom: 1px solid var(--line);
+      padding: 10px;
+      white-space: nowrap;
+    }
+
+    tbody td {
+      border-bottom: 1px solid #eee7d8;
+      padding: 9px 10px;
+      white-space: nowrap;
+    }
+
+    tbody tr:nth-child(even) {
+      background: #fff9ef;
+    }
+
+    .pos {
+      color: var(--good);
+      font-weight: 600;
+    }
+
+    .neg {
+      color: var(--bad);
+      font-weight: 600;
+    }
+
+    pre {
+      margin: 0;
+      padding: 12px;
+      max-height: 65vh;
+      overflow: auto;
+      background: #1f2937;
+      color: #e2e8f0;
+      font-size: 0.8rem;
+      line-height: 1.45;
+    }
+
+    @keyframes rise {
+      from {
+        opacity: 0;
+        transform: translateY(7px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1 class="title">Live Tick Feed Viewer</h1>
+      <p class="sub">Connect karo aur realtime symbols stream table me auto update hoti dekho.</p>
+
+      <div class="controls">
+        <div class="field">
+          <label for="wsUrl">WebSocket URL</label>
+          <input id="wsUrl" type="text" value="wss://equity.bazaarpro.app/feed">
+        </div>
+
+        <div class="field">
+          <label for="jwtToken">JWT Token (without Bearer)</label>
+          <input id="jwtToken" type="text" placeholder="eyJhbGciOi...">
+        </div>
+
+        <button id="connectBtn" class="connect">Connect</button>
+        <button id="disconnectBtn" class="disconnect">Disconnect</button>
+      </div>
+
+      <div class="statusbar">
+        <div id="connState" class="pill">Status: disconnected</div>
+        <div id="messageCount" class="pill">Messages: 0</div>
+        <div id="symbolCount" class="pill">Symbols: 0</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>Latest By Symbol</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>LTP</th>
+                <th>Change</th>
+                <th>Change %</th>
+                <th>Exchange</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody id="ticksBody"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="panel">
+        <h2>Raw Message Stream</h2>
+        <pre id="rawLog"></pre>
+      </article>
+    </section>
+  </div>
+
+  <script>
+    const wsUrlEl = document.getElementById("wsUrl");
+    const jwtTokenEl = document.getElementById("jwtToken");
+    const connectBtn = document.getElementById("connectBtn");
+    const disconnectBtn = document.getElementById("disconnectBtn");
+
+    const connStateEl = document.getElementById("connState");
+    const messageCountEl = document.getElementById("messageCount");
+    const symbolCountEl = document.getElementById("symbolCount");
+    const ticksBody = document.getElementById("ticksBody");
+    const rawLog = document.getElementById("rawLog");
+
+    let ws = null;
+    let totalMessages = 0;
+    const ticksBySymbol = new Map();
+    const rawBuffer = [];
+    const MAX_RAW_LINES = 120;
+
+    function normalizeToken(raw) {
+      let token = (raw || "").trim();
+      if (token.toLowerCase().startsWith("bearer ")) {
+        token = token.slice(7).trim();
+      }
+      if ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))) {
+        token = token.slice(1, -1).trim();
+      }
+      return token;
+    }
+
+    function looksLikeJWT(token) {
+      return token.split(".").length === 3;
+    }
+
+    function setStatus(text, kind) {
+      connStateEl.className = "pill";
+      if (kind === "ok") connStateEl.classList.add("ok");
+      if (kind === "err") connStateEl.classList.add("err");
+      connStateEl.textContent = "Status: " + text;
+    }
+
+    function fmtNum(v, fallback = "-") {
+      if (typeof v !== "number" || Number.isNaN(v)) return fallback;
+      return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    }
+
+    function fmtTime(ts) {
+      if (!ts) return "-";
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return "-";
+      return d.toLocaleTimeString();
+    }
+
+    function renderTable() {
+      const rows = Array.from(ticksBySymbol.values()).sort((a, b) => a.symbol.localeCompare(b.symbol));
+      symbolCountEl.textContent = "Symbols: " + rows.length;
+
+      ticksBody.innerHTML = rows.map((t) => {
+        const cls = (t.netChange || 0) >= 0 ? "pos" : "neg";
+        return "<tr>" +
+          "<td>" + (t.symbol || "-") + "</td>" +
+          "<td>" + fmtNum(t.ltp) + "</td>" +
+          "<td class='" + cls + "'>" + fmtNum(t.netChange) + "</td>" +
+          "<td class='" + cls + "'>" + fmtNum(t.netChangePercent) + "%</td>" +
+          "<td>" + (t.exchange || "-") + "</td>" +
+          "<td>" + fmtTime(t.timestamp) + "</td>" +
+          "</tr>";
+      }).join("");
+    }
+
+    function appendRaw(obj) {
+      const line = JSON.stringify(obj);
+      rawBuffer.push(line);
+      if (rawBuffer.length > MAX_RAW_LINES) rawBuffer.shift();
+      rawLog.textContent = rawBuffer.join("\n");
+      rawLog.scrollTop = rawLog.scrollHeight;
+    }
+
+    function connect() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        appendRaw({ info: "already connected" });
+        return;
+      }
+
+      const base = wsUrlEl.value.trim();
+      const token = normalizeToken(jwtTokenEl.value);
+      if (!base || !token) {
+        setStatus("missing url/token", "err");
+        appendRaw({ error: "Provide websocket URL and JWT token" });
+        return;
+      }
+
+      if (!looksLikeJWT(token)) {
+        setStatus("invalid token format", "err");
+        appendRaw({ error: "JWT format invalid. Paste token only (without Bearer)." });
+        return;
+      }
+
+      jwtTokenEl.value = token;
+
+      const url = base.includes("?") ? (base + "&token=" + encodeURIComponent(token)) : (base + "?token=" + encodeURIComponent(token));
+      appendRaw({ info: "connecting", url: url.replace(token, "<token>") });
+
+      setStatus("connecting", "");
+      ws = new WebSocket(url);
+
+      ws.onopen = function () {
+        setStatus("connected", "ok");
+        appendRaw({ info: "socket connected" });
+      };
+
+      ws.onmessage = function (event) {
+        totalMessages += 1;
+        messageCountEl.textContent = "Messages: " + totalMessages;
+
+        try {
+          const payload = JSON.parse(event.data);
+          appendRaw(payload);
+
+          if (payload && payload.symbol) {
+            ticksBySymbol.set(payload.symbol, payload);
+            renderTable();
+          }
+        } catch (err) {
+          appendRaw({ error: "non-json message", raw: event.data });
+        }
+      };
+
+      ws.onerror = function () {
+        setStatus("error", "err");
+        appendRaw({ error: "socket error" });
+      };
+
+      ws.onclose = function (ev) {
+        setStatus("closed (" + ev.code + ")", "");
+        appendRaw({ info: "socket closed", code: ev.code, reason: ev.reason || "" });
+        if (ev.code === 1006) {
+          appendRaw({
+            hint: "1006 usually means handshake/token issue or proxy drop. Try fresh login JWT and ensure token has no Bearer prefix."
+          });
+        }
+      };
+    }
+
+    function disconnect() {
+      if (ws) {
+        ws.close();
+      }
+    }
+
+    connectBtn.addEventListener("click", connect);
+    disconnectBtn.addEventListener("click", disconnect);
+  </script>
+</body>
+</html>

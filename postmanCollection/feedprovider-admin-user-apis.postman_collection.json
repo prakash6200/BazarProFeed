@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "b9a3c6de-8f62-4d1b-9d6d-5df7f1b3f9a1",
     "name": "FeedProvider Admin & User APIs",
-    "description": "Postman collection for current FeedProvider APIs.\n\nAuth flow:\n1) /auth/signup (optional)\n2) /auth/login to get jwt_token and api_token\n3) Use Authorization: Bearer <jwt_token> for /api and /admin routes\n\nWebSocket Feed:\n- URL: ws://localhost:8081/feed?token={{jwt_token}}\n\nZerodha session flow (admin):\n1) Login as admin and get jwt_token\n2) Obtain fresh request_token from Zerodha login\n3) Call POST /admin/zerodha/session with request_token\n4) Access token is stored in DB and feed service uses latest active token\n5) Check status using GET /admin/zerodha/session/status",
+    "description": "Postman collection for current FeedProvider APIs.\n\nAuth flow:\n1) /auth/signup (optional)\n2) /auth/login to get jwt_token and api_token\n3) Use Authorization: Bearer <jwt_token> for /api and /admin routes\n\nWebSocket Feed:\n- URL: ws://localhost:8081/feed?token={{jwt_token}}\n\nZerodha session flow (admin):\n1) Login as admin and get jwt_token\n2) Obtain fresh request_token from Zerodha login (single-use, short-lived)\n3) Call POST /admin/zerodha/session with request_token (send token only, not callback URL)\n4) Access token is stored in DB and feed service uses latest active token\n5) Check status using GET /admin/zerodha/session/status",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -326,7 +326,7 @@
           "response": []
         },
         {
-          "name": "Import Instruments CSV",
+          "name": "Admin Change Password",
           "request": {
             "method": "POST",
             "header": [
@@ -341,7 +341,77 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"file_path\": \"instruments.csv\"\n}"
+              "raw": "{\n  \"current_password\": \"{{password}}\",\n  \"new_password\": \"newpass123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/change-password",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "change-password"
+              ]
+            },
+            "description": "Admin-only. Change current admin password.\nValidation:\n- current_password required\n- new_password required (min 6 chars)\n- new_password must be different"
+          },
+          "response": []
+        },
+        {
+          "name": "Admin Logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('jwt_token', '');",
+                  "pm.collectionVariables.set('api_token', '');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/logout",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "logout"
+              ]
+            },
+            "description": "Admin-only. Logout current admin session.\nToken is revoked server-side; old JWT should stop working."
+          },
+          "response": []
+        },
+        {
+          "name": "Import Instruments CSV",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
             },
             "url": {
               "raw": "{{base_url}}/admin/instruments/import",
@@ -354,7 +424,7 @@
                 "import"
               ]
             },
-            "description": "Admin-only. Import instruments from CSV file path.\nDefault file_path is instruments.csv if omitted."
+            "description": "Admin-only. Import instruments using multipart/form-data.\nRules:\n- field name must be file\n- only one file allowed\n- only .csv file allowed"
           },
           "response": []
         },
