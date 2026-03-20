@@ -63,6 +63,12 @@ func main() {
 	zerodhaFeedService := services.NewZerodhaFeedService(config.App.Zerodha, config.DB, tickHub)
 	zerodhaFeedService.Start(ctx)
 
+	// Global Market Feed integration (separate SocketHub)
+	globMarketTickHub := services.NewTickHub()
+	globMarketFeedService := services.NewGlobalMarketFeedService()
+	globMarketFeedService.Start(ctx, globMarketTickHub)
+	globSocketHub := config.NewSocketHub(config.DB)
+
 	socketHub := config.NewSocketHub(config.DB)
 
 	defer func() {
@@ -93,10 +99,11 @@ func main() {
 
 	socketHub.RegisterRoutes(app, "/feed")
 	socketHub.RegisterSingleInstrumentRoutes(app, "/feed/one")
+	globSocketHub.RegisterRoutes(app, "/globalfeed")
 
+	// Zerodha tick broadcast
 	events, unsubscribe := tickHub.Subscribe(1024)
 	defer unsubscribe()
-
 	go func() {
 		for {
 			select {
@@ -107,6 +114,23 @@ func main() {
 					return
 				}
 				socketHub.BroadcastJSON(event)
+			}
+		}
+	}()
+
+	// Global market tick broadcast (separate for global clients)
+	globEvents, globUnsubscribe := globMarketTickHub.Subscribe(1024)
+	defer globUnsubscribe()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-globEvents:
+				if !ok {
+					return
+				}
+				globSocketHub.BroadcastJSON(event)
 			}
 		}
 	}()
