@@ -929,12 +929,8 @@ func (s *ZerodhaFeedService) seedRegistryFromDatabase() {
 			symbol = strconv.FormatInt(instrument.InstrumentToken, 10)
 		}
 
-		segment := strings.ToUpper(strings.TrimSpace(instrument.Segment))
-		mode := modeQuote
-		if strings.Contains(segment, "MCX") || exchange == "MCX" {
-			mode = modeFull
-		}
-
+		// Always use modeFull for all instruments to get bid/ask data
+		mode := modeFull
 		s.registry.Add(instrument.InstrumentToken, instrumentMeta{
 			Mode:     mode,
 			Exchange: exchange,
