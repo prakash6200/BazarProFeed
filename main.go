@@ -100,6 +100,7 @@ func main() {
 	socketHub.RegisterRoutes(app, "/feed")
 	socketHub.RegisterSingleInstrumentRoutes(app, "/feed/one")
 	globSocketHub.RegisterRoutes(app, "/globalfeed")
+	globSocketHub.RegisterSingleInstrumentRoutes(app, "/globalfeed/one")
 
 	// Zerodha tick broadcast
 	events, unsubscribe := tickHub.Subscribe(1024)
