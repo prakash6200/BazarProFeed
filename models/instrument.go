@@ -258,11 +258,13 @@ func ImportInstrumentsFromCSV(db *gorm.DB, csvPath string) (*CSVImportResult, er
 
 	normalized := normalizeHeader(header)
 	if !validateCSVHeader(normalized) {
-		return nil, fmt.Errorf("invalid csv header")
+		return nil, fmt.Errorf("invalid csv header: must be [instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,tick_size,lot_size,instrument_type,segment,exchange] in this exact order")
 	}
 
 	result := &CSVImportResult{}
 	batch := make([]Instrument, 0, 1000)
+	var rowErrors []string
+	rowNum := 2 // 1-based, header is line 1
 
 	flush := func(rows []Instrument) error {
 		if len(rows) == 0 {
@@ -301,14 +303,18 @@ func ImportInstrumentsFromCSV(db *gorm.DB, csvPath string) (*CSVImportResult, er
 			break
 		}
 		if readErr != nil {
+			rowErrors = append(rowErrors, fmt.Sprintf("row %d: read error: %v", rowNum, readErr))
 			result.Skipped++
+			rowNum++
 			continue
 		}
 
 		result.TotalRows++
 		instrument, parseErr := parseInstrumentCSVRecord(record)
 		if parseErr != nil {
+			rowErrors = append(rowErrors, fmt.Sprintf("row %d: %v", rowNum, parseErr))
 			result.Skipped++
+			rowNum++
 			continue
 		}
 
@@ -319,10 +325,15 @@ func ImportInstrumentsFromCSV(db *gorm.DB, csvPath string) (*CSVImportResult, er
 			}
 			batch = batch[:0]
 		}
+		rowNum++
 	}
 
 	if err := flush(batch); err != nil {
 		return nil, err
+	}
+
+	if len(rowErrors) > 0 {
+		return result, fmt.Errorf("%d row(s) failed to import. Errors: %v", len(rowErrors), rowErrors)
 	}
 
 	return result, nil
