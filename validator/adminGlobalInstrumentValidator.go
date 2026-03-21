@@ -9,11 +9,25 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+var allowedGlobalInstrumentStatuses = map[string]struct{}{
+	models.GlobalInstrumentStatusActive:   {},
+	models.GlobalInstrumentStatusInactive: {},
+}
+
+func normalizeGlobalInstrumentStatus(value string) string {
+	return strings.ToUpper(strings.TrimSpace(value))
+}
+
 func ValidateGlobalInstrument(inst *models.GlobalInstrument) error {
 	if strings.TrimSpace(inst.Symbol) == "" {
 		return errors.New("symbol is required")
 	}
-	if inst.Status != models.GlobalInstrumentStatusActive && inst.Status != models.GlobalInstrumentStatusInactive {
+
+	inst.Symbol = strings.ToUpper(strings.TrimSpace(inst.Symbol))
+	inst.Name = strings.TrimSpace(inst.Name)
+	inst.Status = normalizeGlobalInstrumentStatus(inst.Status)
+
+	if _, ok := allowedGlobalInstrumentStatuses[inst.Status]; !ok {
 		return errors.New("status must be ACTIVE or INACTIVE")
 	}
 	return nil
@@ -74,14 +88,24 @@ func ValidateListGlobalInstrumentsQuery(c *fiber.Ctx) error {
 		includeDeleted = parsed
 	}
 
-	status := strings.ToUpper(strings.TrimSpace(c.Query("status")))
+	status := normalizeGlobalInstrumentStatus(c.Query("status"))
 	search := strings.TrimSpace(c.Query("search"))
 
-	if status != "" && status != models.GlobalInstrumentStatusActive && status != models.GlobalInstrumentStatusInactive {
+	if status != "" {
+		if _, ok := allowedGlobalInstrumentStatuses[status]; !ok {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "status must be ACTIVE or INACTIVE",
+				"error":       "status must be ACTIVE or INACTIVE",
+			})
+		}
+	}
+
+	if len(search) > 100 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
-			"message":     "status must be ACTIVE or INACTIVE",
-			"error":       "status must be ACTIVE or INACTIVE",
+			"message":     "search must be less than or equal to 100 characters",
+			"error":       "search must be less than or equal to 100 characters",
 		})
 	}
 

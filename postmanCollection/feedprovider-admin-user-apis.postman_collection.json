@@ -193,11 +193,18 @@
               { "key": "Authorization", "value": "Bearer {{jwt_token}}" }
             ],
             "url": {
-              "raw": "{{base_url}}/admin/global-instruments",
+              "raw": "{{base_url}}/admin/global-instruments?page=1&limit=20&include_deleted=false&status=ACTIVE&search=GBP",
               "host": ["{{base_url}}"],
-              "path": ["admin", "global-instruments"]
+              "path": ["admin", "global-instruments"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" },
+                { "key": "include_deleted", "value": "false" },
+                { "key": "status", "value": "ACTIVE" },
+                { "key": "search", "value": "GBP" }
+              ]
             },
-            "description": "Paginated list of global instruments"
+            "description": "Paginated list of global instruments.\nSupported query params:\n- page\n- limit\n- include_deleted\n- status: ACTIVE or INACTIVE\n- search: matches symbol or name\n\nResponse shape matches admin instruments list with status_code, message, instruments, and pagination."
           }
         },
         {
@@ -227,7 +234,7 @@
               "host": ["{{base_url}}"],
               "path": ["admin", "global-instruments"]
             },
-            "description": "Create a new global instrument"
+            "description": "Create a new global instrument.\nBody fields:\n- symbol: required\n- name: optional\n- status: ACTIVE or INACTIVE"
           }
         },
         {
@@ -247,7 +254,7 @@
               "host": ["{{base_url}}"],
               "path": ["admin", "global-instruments", "{{global_instrument_id}}"]
             },
-            "description": "Update, soft delete, or undelete a global instrument by ID"
+            "description": "Update, soft delete, or undelete a global instrument by ID.\nSet is_deleted=true for soft delete, false for undelete."
           }
         },
         {

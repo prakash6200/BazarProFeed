@@ -85,6 +85,9 @@ func (ctl *AdminGlobalInstrumentController) Update(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
 	}
+	if err := validator.ValidateGlobalInstrument(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
 	var instrument models.GlobalInstrument
 	if err := ctl.DB.First(&instrument, "id = ?", id).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "not found"})
