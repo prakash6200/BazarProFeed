@@ -186,6 +186,71 @@
       "name": "Admin APIs",
       "item": [
         {
+          "name": "List Global Instruments",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/global-instruments",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "global-instruments"]
+            },
+            "description": "Paginated list of global instruments"
+          }
+        },
+        {
+          "name": "Create Global Instrument",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "type": "text/javascript",
+              "exec": [
+                "let r = pm.response.json();",
+                "if (r && r.id) pm.collectionVariables.set('global_instrument_id', r.id);"
+              ]
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{jwt_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"GBPUSD\",\n  \"name\": \"British Pound/USD\",\n  \"status\": \"ACTIVE\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/global-instruments",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "global-instruments"]
+            },
+            "description": "Create a new global instrument"
+          }
+        },
+        {
+          "name": "Update Global Instrument (Status/Delete/Undelete)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{jwt_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"GBPUSD\",\n  \"name\": \"British Pound/USD\",\n  \"status\": \"INACTIVE\",\n  \"is_deleted\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/global-instruments/{{global_instrument_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "global-instruments", "{{global_instrument_id}}"]
+            },
+            "description": "Update, soft delete, or undelete a global instrument by ID"
+          }
+        },
+        {
           "name": "Create User",
           "request": {
             "method": "POST",

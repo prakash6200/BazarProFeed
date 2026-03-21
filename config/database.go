@@ -179,7 +179,7 @@ func ConnectDatabase() {
 		log.Fatal("failed to ensure enum types: ", err)
 	}
 
-	if err := db.AutoMigrate(&models.User{}, &models.Instrument{}, &models.ZerodhaSession{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Instrument{}, &models.GlobalInstrument{}, &models.ZerodhaSession{}); err != nil {
 		_ = sqlDB.Close()
 		log.Fatal("failed to run migrations: ", err)
 	}

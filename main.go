@@ -89,11 +89,13 @@ func main() {
 
 	adminController := controller.NewAdminController(config.DB, socketHub)
 	instrumentController := controller.NewAdminInstrumentController(config.DB)
+	globalInstrumentController := controller.NewAdminGlobalInstrumentController(config.DB, globMarketFeedService)
 	zerodhaController := controller.NewAdminZerodhaController(config.DB, zerodhaFeedService)
 	userController := controller.NewUserController(config.DB, socketHub)
 
 	router.RegisterAdminRoutes(app, adminController, config.DB)
 	router.RegisterAdminInstrumentRoutes(app, instrumentController, config.DB)
+	router.RegisterAdminGlobalInstrumentRoutes(app, globalInstrumentController, config.DB)
 	router.RegisterAdminZerodhaRoutes(app, zerodhaController, config.DB)
 	router.RegisterUserRoutes(app, userController, config.DB)
 

@@ -11,10 +11,8 @@ import (
 )
 
 type MarketFeedProvider interface {
-	Start(ctx context.Context)
 	Subscribe(symbols []string) error
 	Unsubscribe(symbols []string) error
-	Stop()
 }
 
 type GlobalMarketFeedService struct {
