@@ -92,6 +92,45 @@ func (azc *AdminZerodhaController) GetSessionStatus(c *fiber.Ctx) error {
 	})
 }
 
+func (azc *AdminZerodhaController) GetCircuitStatus(c *fiber.Ctx) error {
+	if azc.zerodhaFeed == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "zerodha service is not configured",
+			"error":       "zerodha service is not configured",
+		})
+	}
+
+	statuses, err := azc.zerodhaFeed.FetchCircuitStatus(c.Context())
+	if err != nil {
+		log.Printf("failed to fetch circuit status: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch circuit status",
+			"error":       err.Error(),
+		})
+	}
+
+	// ?circuit_only=true → return only instruments that have hit a circuit
+	circuitOnly := strings.EqualFold(strings.TrimSpace(c.Query("circuit_only")), "true")
+	if circuitOnly {
+		filtered := make([]services.InstrumentCircuitStatus, 0)
+		for _, s := range statuses {
+			if s.IsUpperCircuit || s.IsLowerCircuit {
+				filtered = append(filtered, s)
+			}
+		}
+		statuses = filtered
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"message":     "circuit status fetched successfully",
+		"total":       len(statuses),
+		"instruments": statuses,
+	})
+}
+
 func buildZerodhaSessionResponse(session *models.ZerodhaSession) fiber.Map {
 	updatedByAdminID := ""
 	if session.UpdatedByAdminID != nil {

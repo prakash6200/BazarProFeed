@@ -7,23 +7,27 @@ import (
 )
 
 type NormalizedTick struct {
-	Exchange         string    `json:"exchange"`
-	Symbol           string    `json:"symbol"`
-	LTP              float64   `json:"ltp"`
-	Open             float64   `json:"open"`
-	High             float64   `json:"high"`
-	Low              float64   `json:"low"`
-	Close            float64   `json:"close"`
-	BidPrice         float64   `json:"bidPrice"`
-	BidQty           int64     `json:"bidQty"`
-	AskPrice         float64   `json:"askPrice"`
-	AskQty           int64     `json:"askQty"`
-	TBQ              int64     `json:"tbq"`
-	TSQ              int64     `json:"tsq"`
-	OI               int64     `json:"oi"`
-	Timestamp        time.Time `json:"timestamp"`
-	NetChange        float64   `json:"netChange"`
-	NetChangePercent float64   `json:"netChangePercent"`
+	Exchange          string    `json:"exchange"`
+	Symbol            string    `json:"symbol"`
+	LTP               float64   `json:"ltp"`
+	Open              float64   `json:"open"`
+	High              float64   `json:"high"`
+	Low               float64   `json:"low"`
+	Close             float64   `json:"close"`
+	BidPrice          float64   `json:"bidPrice"`
+	BidQty            int64     `json:"bidQty"`
+	AskPrice          float64   `json:"askPrice"`
+	AskQty            int64     `json:"askQty"`
+	TBQ               int64     `json:"tbq"`
+	TSQ               int64     `json:"tsq"`
+	OI                int64     `json:"oi"`
+	Timestamp         time.Time `json:"timestamp"`
+	NetChange         float64   `json:"netChange"`
+	NetChangePercent  float64   `json:"netChangePercent"`
+	IsUpperCircuit    bool      `json:"is_upper_circuit"`
+	IsLowerCircuit    bool      `json:"is_lower_circuit"`
+	UpperCircuitLimit float64   `json:"upper_circuit_limit,omitempty"`
+	LowerCircuitLimit float64   `json:"lower_circuit_limit,omitempty"`
 }
 
 type MarketStateManager struct {

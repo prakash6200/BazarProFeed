@@ -43,6 +43,8 @@ const (
 	staleTickCheckInterval = 15 * time.Second
 	staleTickMaxSilence    = 60 * time.Second
 
+	circuitCheckInterval = 60 * time.Second
+
 	packetMinLength     = 8
 	packetQuoteOHLCMin  = 28
 	packetQuoteOHLCMax  = 44
@@ -86,6 +88,32 @@ type kiteErrorResponse struct {
 	Status    string `json:"status"`
 	ErrorType string `json:"error_type"`
 	Message   string `json:"message"`
+}
+
+const (
+	kiteRESTBaseURL    = "https://api.kite.trade"
+	kiteQuoteBatchSize = 500
+)
+
+type kiteQuoteData struct {
+	LastPrice         float64 `json:"last_price"`
+	UpperCircuitLimit float64 `json:"upper_circuit_limit"`
+	LowerCircuitLimit float64 `json:"lower_circuit_limit"`
+}
+
+type kiteQuoteAPIResponse struct {
+	Status string                   `json:"status"`
+	Data   map[string]kiteQuoteData `json:"data"`
+}
+
+type InstrumentCircuitStatus struct {
+	Exchange          string  `json:"exchange"`
+	Symbol            string  `json:"symbol"`
+	LTP               float64 `json:"ltp"`
+	UpperCircuitLimit float64 `json:"upper_circuit_limit"`
+	LowerCircuitLimit float64 `json:"lower_circuit_limit"`
+	IsUpperCircuit    bool    `json:"is_upper_circuit"`
+	IsLowerCircuit    bool    `json:"is_lower_circuit"`
 }
 
 type subscriptionRegistry struct {
@@ -179,17 +207,21 @@ type ZerodhaFeedService struct {
 	writeMu sync.Mutex
 
 	lastInboundTickAt atomic.Int64
+
+	circuitStateMu sync.Mutex
+	circuitState   map[string]bool // symbol -> was_in_circuit (upper||lower)
 }
 
 func NewZerodhaFeedService(cfg config.ZerodhaConfig, db *gorm.DB, tickHub *TickHub) *ZerodhaFeedService {
 	service := &ZerodhaFeedService{
-		cfg:         cfg,
-		db:          db,
-		tickHub:     tickHub,
-		marketState: NewMarketStateManager(),
-		registry:    newSubscriptionRegistry(),
-		httpClient:  &http.Client{Timeout: 10 * time.Second},
-		state:       connectionStateDisconnected,
+		cfg:          cfg,
+		db:           db,
+		tickHub:      tickHub,
+		marketState:  NewMarketStateManager(),
+		registry:     newSubscriptionRegistry(),
+		httpClient:   &http.Client{Timeout: 10 * time.Second},
+		state:        connectionStateDisconnected,
+		circuitState: make(map[string]bool),
 	}
 	service.seedRegistryFromDatabase()
 	service.loadAccessTokenFromDatabase()
@@ -236,6 +268,7 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 			if exchangeErr := s.ensureAccessTokenFromRequestToken(); exchangeErr == nil {
 				if revalidateErr := s.validateAccessToken(); revalidateErr == nil {
 					go s.rebroadcastStaleStateLoop(ctx)
+					go s.startCircuitDetectionLoop(ctx)
 					go s.runReconnectLoop(ctx)
 					return
 				}
@@ -247,6 +280,7 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 	}
 
 	go s.rebroadcastStaleStateLoop(ctx)
+	go s.startCircuitDetectionLoop(ctx)
 	go s.runReconnectLoop(ctx)
 }
 
@@ -542,8 +576,170 @@ func (s *ZerodhaFeedService) SwitchMode(token int64, mode TickMode) error {
 	return s.writeJSON(conn, map[string]any{"a": "mode", "v": []any{string(mode), []int64{token}}})
 }
 
+// startCircuitDetectionLoop polls Kite /quote API every circuitCheckInterval.
+// When a symbol enters or exits circuit, it publishes an enriched tick to the
+// tickHub so connected users on /feed are immediately notified.
+func (s *ZerodhaFeedService) startCircuitDetectionLoop(ctx context.Context) {
+	ticker := time.NewTicker(circuitCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.checkAndBroadcastCircuits(ctx)
+		}
+	}
+}
+
+func (s *ZerodhaFeedService) checkAndBroadcastCircuits(ctx context.Context) {
+	if s.tickHub == nil {
+		return
+	}
+
+	statuses, err := s.FetchCircuitStatus(ctx)
+	if err != nil {
+		log.Printf("circuit check failed: %v", err)
+		return
+	}
+
+	for _, status := range statuses {
+		isInCircuit := status.IsUpperCircuit || status.IsLowerCircuit
+
+		s.circuitStateMu.Lock()
+		wasInCircuit := s.circuitState[status.Symbol]
+		s.circuitState[status.Symbol] = isInCircuit
+		s.circuitStateMu.Unlock()
+
+		// Only broadcast on state change (entered or exited circuit)
+		if isInCircuit == wasInCircuit {
+			continue
+		}
+
+		// Get latest cached tick and enrich it with circuit info
+		tick, ok := s.marketState.Get(status.Symbol)
+		if !ok {
+			tick = NormalizedTick{
+				Exchange:  status.Exchange,
+				Symbol:    status.Symbol,
+				LTP:       status.LTP,
+				Timestamp: time.Now().UTC(),
+			}
+		}
+
+		tick.IsUpperCircuit = status.IsUpperCircuit
+		tick.IsLowerCircuit = status.IsLowerCircuit
+		tick.UpperCircuitLimit = status.UpperCircuitLimit
+		tick.LowerCircuitLimit = status.LowerCircuitLimit
+		tick.Timestamp = time.Now().UTC()
+
+		s.tickHub.Publish(tick)
+
+		if isInCircuit {
+			circuitType := "UPPER"
+			if status.IsLowerCircuit {
+				circuitType = "LOWER"
+			}
+			log.Printf("circuit hit: symbol=%s type=%s ltp=%.2f limit=%.2f",
+				status.Symbol, circuitType, status.LTP, status.UpperCircuitLimit)
+		} else {
+			log.Printf("circuit cleared: symbol=%s ltp=%.2f", status.Symbol, status.LTP)
+		}
+	}
+}
+
 func (s *ZerodhaFeedService) GetLatestState(symbol string) (NormalizedTick, bool) {
 	return s.marketState.Get(symbol)
+}
+
+// FetchCircuitStatus fetches upper/lower circuit info for all registered instruments
+// from the Kite REST quote API and returns which ones have hit their circuit limits.
+func (s *ZerodhaFeedService) FetchCircuitStatus(ctx context.Context) ([]InstrumentCircuitStatus, error) {
+	apiKey := strings.TrimSpace(s.cfg.APIKey)
+	accessToken := s.getAccessToken()
+	if apiKey == "" || accessToken == "" {
+		return nil, errors.New("zerodha credentials not configured")
+	}
+
+	tokens := s.registry.SnapshotTokens()
+	identifiers := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		meta, ok := s.registry.Get(token)
+		if !ok || meta.Exchange == "" || meta.Exchange == "UNKNOWN" || meta.Symbol == "" {
+			continue
+		}
+		identifiers = append(identifiers, meta.Exchange+":"+meta.Symbol)
+	}
+
+	if len(identifiers) == 0 {
+		return []InstrumentCircuitStatus{}, nil
+	}
+
+	var results []InstrumentCircuitStatus
+	for i := 0; i < len(identifiers); i += kiteQuoteBatchSize {
+		end := i + kiteQuoteBatchSize
+		if end > len(identifiers) {
+			end = len(identifiers)
+		}
+
+		quoteData, err := s.fetchKiteQuoteBatch(ctx, apiKey, accessToken, identifiers[i:end])
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch quote batch starting at %d: %w", i, err)
+		}
+
+		for key, data := range quoteData {
+			parts := strings.SplitN(key, ":", 2)
+			exchange, symbol := "", key
+			if len(parts) == 2 {
+				exchange, symbol = parts[0], parts[1]
+			}
+			results = append(results, InstrumentCircuitStatus{
+				Exchange:          exchange,
+				Symbol:            symbol,
+				LTP:               data.LastPrice,
+				UpperCircuitLimit: data.UpperCircuitLimit,
+				LowerCircuitLimit: data.LowerCircuitLimit,
+				IsUpperCircuit:    data.UpperCircuitLimit > 0 && data.LastPrice >= data.UpperCircuitLimit,
+				IsLowerCircuit:    data.LowerCircuitLimit > 0 && data.LastPrice <= data.LowerCircuitLimit,
+			})
+		}
+	}
+
+	return results, nil
+}
+
+func (s *ZerodhaFeedService) fetchKiteQuoteBatch(ctx context.Context, apiKey, accessToken string, identifiers []string) (map[string]kiteQuoteData, error) {
+	reqURL, _ := url.Parse(kiteRESTBaseURL + "/quote")
+	q := reqURL.Query()
+	for _, id := range identifiers {
+		q.Add("i", id)
+	}
+	reqURL.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Kite-Version", "3")
+	req.Header.Set("Authorization", "token "+apiKey+":"+accessToken)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var apiResp kiteQuoteAPIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("failed to parse quote response: %w", err)
+	}
+
+	if apiResp.Status != "success" {
+		return nil, fmt.Errorf("kite quote API returned status: %s", apiResp.Status)
+	}
+
+	return apiResp.Data, nil
 }
 
 func (s *ZerodhaFeedService) runReconnectLoop(ctx context.Context) {

@@ -13,4 +13,5 @@ func RegisterAdminZerodhaRoutes(app *fiber.App, zerodhaController *controller.Ad
 	adminRoutes := app.Group("/admin", middleware.UserAuth(db), middleware.AdminOnlyAuth)
 	adminRoutes.Get("/zerodha/session/status", zerodhaController.GetSessionStatus)
 	adminRoutes.Post("/zerodha/session", validator.ValidateUpdateZerodhaSession, zerodhaController.UpdateSession)
+	adminRoutes.Get("/zerodha/circuit", zerodhaController.GetCircuitStatus)
 }
