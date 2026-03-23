@@ -65,7 +65,7 @@ func main() {
 
 	// Global Market Feed integration (separate SocketHub)
 	globMarketTickHub := services.NewTickHub()
-	globMarketFeedService := services.NewGlobalMarketFeedService()
+	globMarketFeedService := services.NewGlobalMarketFeedService(config.DB)
 	globMarketFeedService.Start(ctx, globMarketTickHub)
 	globSocketHub := config.NewSocketHub(config.DB)
 
@@ -150,6 +150,7 @@ func main() {
 	go func() {
 		<-ctx.Done()
 		socketHub.CloseAll()
+		globSocketHub.CloseAll()
 		if err := app.Shutdown(); err != nil {
 			log.Printf("failed to shutdown fiber app: %v", err)
 		}

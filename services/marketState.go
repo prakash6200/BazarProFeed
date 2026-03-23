@@ -63,6 +63,18 @@ func (m *MarketStateManager) Get(symbol string) (NormalizedTick, bool) {
 	return tick, ok
 }
 
+func (m *MarketStateManager) Snapshot() []NormalizedTick {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	ticks := make([]NormalizedTick, 0, len(m.latest))
+	for _, tick := range m.latest {
+		ticks = append(ticks, tick)
+	}
+
+	return ticks
+}
+
 func roundTo2(value float64) float64 {
 	return math.Round(value*100) / 100
 }

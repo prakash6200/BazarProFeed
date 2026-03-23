@@ -40,6 +40,9 @@ const (
 	maxReconnectBackoff = 30 * time.Second
 	spikeAlertPercent   = 20.0
 
+	staleTickCheckInterval = 15 * time.Second
+	staleTickMaxSilence    = 60 * time.Second
+
 	packetMinLength     = 8
 	packetQuoteOHLCMin  = 28
 	packetQuoteOHLCMax  = 44
@@ -174,6 +177,8 @@ type ZerodhaFeedService struct {
 	conn   *websocket.Conn
 
 	writeMu sync.Mutex
+
+	lastInboundTickAt atomic.Int64
 }
 
 func NewZerodhaFeedService(cfg config.ZerodhaConfig, db *gorm.DB, tickHub *TickHub) *ZerodhaFeedService {
@@ -230,6 +235,7 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 		if s.shouldExchangeRequestToken() {
 			if exchangeErr := s.ensureAccessTokenFromRequestToken(); exchangeErr == nil {
 				if revalidateErr := s.validateAccessToken(); revalidateErr == nil {
+					go s.rebroadcastStaleStateLoop(ctx)
 					go s.runReconnectLoop(ctx)
 					return
 				}
@@ -240,7 +246,46 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 		return
 	}
 
+	go s.rebroadcastStaleStateLoop(ctx)
 	go s.runReconnectLoop(ctx)
+}
+
+func (s *ZerodhaFeedService) rebroadcastStaleStateLoop(ctx context.Context) {
+	ticker := time.NewTicker(staleTickCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.rebroadcastIfStale()
+		}
+	}
+}
+
+func (s *ZerodhaFeedService) rebroadcastIfStale() {
+	if s.tickHub == nil {
+		return
+	}
+
+	lastTickAt := s.lastInboundTickAt.Load()
+	if lastTickAt == 0 {
+		return
+	}
+
+	if time.Since(time.Unix(0, lastTickAt)) < staleTickMaxSilence {
+		return
+	}
+
+	ticks := s.marketState.Snapshot()
+	if len(ticks) == 0 {
+		return
+	}
+
+	for _, tick := range ticks {
+		s.tickHub.Publish(tick)
+	}
 }
 
 func (s *ZerodhaFeedService) loadAccessTokenFromDatabase() {
@@ -804,6 +849,7 @@ func (s *ZerodhaFeedService) parseAndPublishTicks(payload []byte) {
 		}
 
 		previous, updated, hasPrevious := s.marketState.UpdateWithPrevious(tick)
+		s.lastInboundTickAt.Store(time.Now().UnixNano())
 		if hasPrevious && previous.LTP > 0 {
 			changePct := math.Abs(((updated.LTP - previous.LTP) / previous.LTP) * 100)
 			if changePct >= spikeAlertPercent {

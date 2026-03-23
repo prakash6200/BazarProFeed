@@ -40,6 +40,22 @@ func NormalizeGlobalInstrumentStatus(status string) string {
 	return GlobalInstrumentStatusActive
 }
 
+// GetActiveGlobalInstrumentSymbols returns all symbols that are ACTIVE and not deleted.
+// Used at service startup to subscribe to the correct set of instruments from DB.
+func GetActiveGlobalInstrumentSymbols(db *gorm.DB) ([]string, error) {
+	var instruments []GlobalInstrument
+	if err := db.Where("status = ? AND is_deleted = ?", GlobalInstrumentStatusActive, false).
+		Select("symbol").
+		Find(&instruments).Error; err != nil {
+		return nil, err
+	}
+	symbols := make([]string, 0, len(instruments))
+	for _, inst := range instruments {
+		symbols = append(symbols, inst.Symbol)
+	}
+	return symbols, nil
+}
+
 func GetGlobalInstrumentsPaginated(db *gorm.DB, page, limit int, includeDeleted bool, filters GlobalInstrumentListFilters) ([]GlobalInstrument, int64, error) {
 	query := db.Model(&GlobalInstrument{})
 	if !includeDeleted {
