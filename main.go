@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os/signal"
@@ -53,32 +54,36 @@ func seedDefaultAdmin(db *gorm.DB) {
 func main() {
 	config.LoadConfig()
 	config.ConnectDatabase()
+	config.ConnectRedis()
 
 	seedDefaultAdmin(config.DB)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	zerodhaCache := services.NewRedisTickCache(config.RedisClient)
+	globalCache := services.NewRedisTickCache(config.RedisClient)
+
 	tickHub := services.NewTickHub()
-	zerodhaFeedService := services.NewZerodhaFeedService(config.App.Zerodha, config.DB, tickHub)
+	zerodhaFeedService := services.NewZerodhaFeedService(config.App.Zerodha, config.DB, tickHub, zerodhaCache)
 	zerodhaFeedService.Start(ctx)
 
-	// Global Market Feed integration (separate SocketHub)
 	globMarketTickHub := services.NewTickHub()
-	globMarketFeedService := services.NewGlobalMarketFeedService()
+	globMarketFeedService := services.NewGlobalMarketFeedService(config.DB, globalCache)
 	globMarketFeedService.Start(ctx, globMarketTickHub)
 	globSocketHub := config.NewSocketHub(config.DB)
 
 	socketHub := config.NewSocketHub(config.DB)
 
 	defer func() {
+		config.CloseRedis()
 		if err := config.CloseDatabase(); err != nil {
 			log.Printf("failed to close database: %v", err)
 		}
 	}()
 
 	app := fiber.New(fiber.Config{
-		BodyLimit: 50 * 1024 * 1024, // 50 MB upload limit for multipart CSV upload
+		BodyLimit: 50 * 1024 * 1024,
 	})
 
 	app.Use(cors.New(cors.Config{
@@ -99,12 +104,43 @@ func main() {
 	router.RegisterAdminZerodhaRoutes(app, zerodhaController, config.DB)
 	router.RegisterUserRoutes(app, userController, config.DB)
 
+	socketHub.SetInitialStateGetter(func(ctx context.Context, filterSym string) []json.RawMessage {
+		ticks := zerodhaCache.Snapshot(ctx, services.ZerodhaTickPrefix, filterSym)
+		status := services.MarketStatusOpen
+		if !services.IsIndianMarketOpen() {
+			status = services.MarketStatusClosed
+		}
+		msgs := make([]json.RawMessage, 0, len(ticks))
+		for _, tick := range ticks {
+			tick.MarketStatus = status
+			if raw, err := json.Marshal(tick); err == nil {
+				msgs = append(msgs, raw)
+			}
+		}
+		return msgs
+	})
+
+	globSocketHub.SetInitialStateGetter(func(ctx context.Context, filterSym string) []json.RawMessage {
+		ticks := globalCache.Snapshot(ctx, services.GlobalTickPrefix, filterSym)
+		status := services.MarketStatusOpen
+		if !services.IsGlobalMarketOpen() {
+			status = services.MarketStatusClosed
+		}
+		msgs := make([]json.RawMessage, 0, len(ticks))
+		for _, tick := range ticks {
+			tick.MarketStatus = status
+			if raw, err := json.Marshal(tick); err == nil {
+				msgs = append(msgs, raw)
+			}
+		}
+		return msgs
+	})
+
 	socketHub.RegisterRoutes(app, "/feed")
 	socketHub.RegisterSingleInstrumentRoutes(app, "/feed/one")
 	globSocketHub.RegisterRoutes(app, "/globalfeed")
 	globSocketHub.RegisterSingleInstrumentRoutes(app, "/globalfeed/one")
 
-	// Zerodha tick broadcast
 	events, unsubscribe := tickHub.Subscribe(1024)
 	defer unsubscribe()
 	go func() {
@@ -121,7 +157,6 @@ func main() {
 		}
 	}()
 
-	// Global market tick broadcast (separate for global clients)
 	globEvents, globUnsubscribe := globMarketTickHub.Subscribe(1024)
 	defer globUnsubscribe()
 	go func() {
@@ -150,6 +185,7 @@ func main() {
 	go func() {
 		<-ctx.Done()
 		socketHub.CloseAll()
+		globSocketHub.CloseAll()
 		if err := app.Shutdown(); err != nil {
 			log.Printf("failed to shutdown fiber app: %v", err)
 		}

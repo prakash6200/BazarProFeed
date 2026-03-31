@@ -30,10 +30,17 @@ type ZerodhaConfig struct {
 	WSEndpoint   string
 }
 
+type RedisConfig struct {
+	Addr     string
+	Password string
+	DB       string
+}
+
 type Configuration struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 	Zerodha  ZerodhaConfig
+	Redis    RedisConfig
 }
 
 var (
@@ -66,6 +73,11 @@ func LoadConfig() {
 				RequestToken: getEnv("ZERODHA_REQUEST_TOKEN", ""),
 				AccessToken:  getEnv("ZERODHA_ACCESS_TOKEN", ""),
 				WSEndpoint:   getEnv("ZERODHA_WS_ENDPOINT", "wss://ws.kite.trade"),
+			},
+			Redis: RedisConfig{
+				Addr:     getEnv("REDIS_ADDR", "localhost:6379"),
+				Password: getEnv("REDIS_PASSWORD", ""),
+				DB:       getEnv("REDIS_DB", "0"),
 			},
 		}
 	})

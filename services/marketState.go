@@ -6,6 +6,34 @@ import (
 	"time"
 )
 
+const (
+	MarketStatusOpen   = "OPEN"
+	MarketStatusClosed = "CLOSED"
+)
+
+// IsIndianMarketOpen returns true when the current time falls within NSE regular
+// trading hours (Monday–Friday, 09:15–15:30 IST).
+func IsIndianMarketOpen() bool {
+	loc, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		return true // fallback: treat as open
+	}
+	now := time.Now().In(loc)
+	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
+		return false
+	}
+	open := time.Date(now.Year(), now.Month(), now.Day(), 9, 15, 0, 0, loc)
+	close_ := time.Date(now.Year(), now.Month(), now.Day(), 15, 30, 0, 0, loc)
+	return now.After(open) && now.Before(close_)
+}
+
+// IsGlobalMarketOpen returns true on weekdays (forex / global instruments trade 24×5).
+func IsGlobalMarketOpen() bool {
+	now := time.Now().UTC()
+	wd := now.Weekday()
+	return wd != time.Saturday && wd != time.Sunday
+}
+
 type NormalizedTick struct {
 	Exchange         string    `json:"exchange"`
 	Symbol           string    `json:"symbol"`
@@ -24,6 +52,7 @@ type NormalizedTick struct {
 	Timestamp        time.Time `json:"timestamp"`
 	NetChange        float64   `json:"netChange"`
 	NetChangePercent float64   `json:"netChangePercent"`
+	MarketStatus     string    `json:"market_status,omitempty"`
 }
 
 type MarketStateManager struct {
@@ -61,6 +90,18 @@ func (m *MarketStateManager) Get(symbol string) (NormalizedTick, bool) {
 	tick, ok := m.latest[symbol]
 	m.mu.RUnlock()
 	return tick, ok
+}
+
+func (m *MarketStateManager) Snapshot() []NormalizedTick {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	ticks := make([]NormalizedTick, 0, len(m.latest))
+	for _, tick := range m.latest {
+		ticks = append(ticks, tick)
+	}
+
+	return ticks
 }
 
 func roundTo2(value float64) float64 {

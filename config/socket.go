@@ -1,6 +1,8 @@
 package config
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"feedprovider/models"
 	"log"
@@ -38,9 +40,10 @@ type socketJWTClaims struct {
 }
 
 type SocketHub struct {
-	mu      sync.RWMutex
-	clients map[*socketClient]struct{}
-	db      *gorm.DB
+	mu                 sync.RWMutex
+	clients            map[*socketClient]struct{}
+	db                 *gorm.DB
+	initialStateGetter func(ctx context.Context, filterSym string) []json.RawMessage
 }
 
 func NewSocketHub(db *gorm.DB) *SocketHub {
@@ -48,6 +51,10 @@ func NewSocketHub(db *gorm.DB) *SocketHub {
 		clients: make(map[*socketClient]struct{}),
 		db:      db,
 	}
+}
+
+func (h *SocketHub) SetInitialStateGetter(fn func(ctx context.Context, filterSym string) []json.RawMessage) {
+	h.initialStateGetter = fn
 }
 
 func (h *SocketHub) RegisterRoutes(app *fiber.App, path string) {
@@ -59,7 +66,6 @@ func (h *SocketHub) RegisterRoutes(app *fiber.App, path string) {
 	})
 
 	app.Get(path, ws.New(func(c *ws.Conn) {
-
 		token := c.Query("token")
 		if token == "" {
 			log.Println("websocket connection rejected: missing token")
@@ -94,6 +100,17 @@ func (h *SocketHub) RegisterRoutes(app *fiber.App, path string) {
 		h.addClient(client)
 		log.Printf("websocket client connected: user=%s, token=%s", user.Username, maskToken(token))
 		defer h.removeClient(client, "")
+
+		if h.initialStateGetter != nil {
+			initCtx, initCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer initCancel()
+			for _, raw := range h.initialStateGetter(initCtx, "") {
+				client.mu.Lock()
+				_ = c.SetWriteDeadline(time.Now().Add(socketWriteWait))
+				_ = c.WriteMessage(ws.TextMessage, raw)
+				client.mu.Unlock()
+			}
+		}
 
 		done := make(chan struct{})
 		defer close(done)
@@ -175,6 +192,17 @@ func (h *SocketHub) RegisterSingleInstrumentRoutes(app *fiber.App, path string) 
 		h.addClient(client)
 		log.Printf("filtered websocket connected: user=%s symbol=%s", user.Username, filterSymbol)
 		defer h.removeClient(client, filterSymbol)
+
+		if h.initialStateGetter != nil {
+			initCtx, initCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer initCancel()
+			for _, raw := range h.initialStateGetter(initCtx, filterSymbol) {
+				client.mu.Lock()
+				_ = c.SetWriteDeadline(time.Now().Add(socketWriteWait))
+				_ = c.WriteMessage(ws.TextMessage, raw)
+				client.mu.Unlock()
+			}
+		}
 
 		done := make(chan struct{})
 		defer close(done)

@@ -163,6 +163,7 @@ type ZerodhaFeedService struct {
 	registry    *subscriptionRegistry
 	httpClient  *http.Client
 	baseCtx     context.Context
+	redisCache  *RedisTickCache
 
 	running atomic.Bool
 	tokenMu sync.RWMutex
@@ -174,9 +175,11 @@ type ZerodhaFeedService struct {
 	conn   *websocket.Conn
 
 	writeMu sync.Mutex
+
+	lastInboundTickAt atomic.Int64
 }
 
-func NewZerodhaFeedService(cfg config.ZerodhaConfig, db *gorm.DB, tickHub *TickHub) *ZerodhaFeedService {
+func NewZerodhaFeedService(cfg config.ZerodhaConfig, db *gorm.DB, tickHub *TickHub, redisCache *RedisTickCache) *ZerodhaFeedService {
 	service := &ZerodhaFeedService{
 		cfg:         cfg,
 		db:          db,
@@ -185,9 +188,19 @@ func NewZerodhaFeedService(cfg config.ZerodhaConfig, db *gorm.DB, tickHub *TickH
 		registry:    newSubscriptionRegistry(),
 		httpClient:  &http.Client{Timeout: 10 * time.Second},
 		state:       connectionStateDisconnected,
+		redisCache:  redisCache,
 	}
 	service.seedRegistryFromDatabase()
 	service.loadAccessTokenFromDatabase()
+	if redisCache != nil {
+		ticks := redisCache.Snapshot(context.Background(), ZerodhaTickPrefix, "")
+		for _, tick := range ticks {
+			service.marketState.Update(tick)
+		}
+		if len(ticks) > 0 {
+			log.Printf("zerodha market state pre-populated from redis: %d symbols", len(ticks))
+		}
+	}
 	return service
 }
 
@@ -230,6 +243,7 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 		if s.shouldExchangeRequestToken() {
 			if exchangeErr := s.ensureAccessTokenFromRequestToken(); exchangeErr == nil {
 				if revalidateErr := s.validateAccessToken(); revalidateErr == nil {
+					go s.rebroadcastStaleStateLoop(ctx)
 					go s.runReconnectLoop(ctx)
 					return
 				}
@@ -240,7 +254,54 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 		return
 	}
 
+	go s.rebroadcastStaleStateLoop(ctx)
 	go s.runReconnectLoop(ctx)
+}
+
+func (s *ZerodhaFeedService) rebroadcastStaleStateLoop(ctx context.Context) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.rebroadcastIfStale()
+		}
+	}
+}
+
+func (s *ZerodhaFeedService) rebroadcastIfStale() {
+	if s.tickHub == nil {
+		return
+	}
+
+	ticks := s.marketState.Snapshot()
+	if len(ticks) == 0 {
+		return
+	}
+
+	if !IsIndianMarketOpen() {
+		for _, tick := range ticks {
+			tick.MarketStatus = MarketStatusClosed
+			s.tickHub.Publish(tick)
+		}
+		return
+	}
+
+	lastTickAt := s.lastInboundTickAt.Load()
+	if lastTickAt == 0 {
+		return
+	}
+	if time.Since(time.Unix(0, lastTickAt)) < 60*time.Second {
+		return
+	}
+
+	for _, tick := range ticks {
+		tick.MarketStatus = MarketStatusOpen
+		s.tickHub.Publish(tick)
+	}
 }
 
 func (s *ZerodhaFeedService) loadAccessTokenFromDatabase() {
@@ -810,8 +871,13 @@ func (s *ZerodhaFeedService) parseAndPublishTicks(payload []byte) {
 				log.Printf("abnormal tick spike symbol=%s prev=%.2f curr=%.2f changePercent=%.2f", updated.Symbol, previous.LTP, updated.LTP, changePct)
 			}
 		}
+		updated.MarketStatus = MarketStatusOpen
+		s.lastInboundTickAt.Store(time.Now().UnixNano())
 		if s.tickHub != nil {
 			s.tickHub.Publish(updated)
+		}
+		if s.redisCache != nil && s.baseCtx != nil && s.baseCtx.Err() == nil {
+			s.redisCache.Set(s.baseCtx, ZerodhaTickPrefix, updated)
 		}
 	}
 }
