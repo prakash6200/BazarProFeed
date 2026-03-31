@@ -11,6 +11,8 @@ type GlobalInstrument struct {
 	ID        string         `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
 	Symbol    string         `gorm:"uniqueIndex;not null" json:"symbol"`
 	Name      string         `json:"name"`
+	Expiry    *time.Time     `json:"expiry,omitempty"`
+	Strike    float64        `json:"strike"`
 	Status    string         `gorm:"type:instrument_status;not null;default:'ACTIVE';index" json:"status"`
 	IsDeleted bool           `gorm:"not null;default:false;index" json:"is_deleted"`
 	CreatedAt time.Time      `json:"created_at"`

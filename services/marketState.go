@@ -35,24 +35,33 @@ func IsGlobalMarketOpen() bool {
 }
 
 type NormalizedTick struct {
-	Exchange         string    `json:"exchange"`
-	Symbol           string    `json:"symbol"`
-	LTP              float64   `json:"ltp"`
-	Open             float64   `json:"open"`
-	High             float64   `json:"high"`
-	Low              float64   `json:"low"`
-	Close            float64   `json:"close"`
-	BidPrice         float64   `json:"bidPrice"`
-	BidQty           int64     `json:"bidQty"`
-	AskPrice         float64   `json:"askPrice"`
-	AskQty           int64     `json:"askQty"`
-	TBQ              int64     `json:"tbq"`
-	TSQ              int64     `json:"tsq"`
-	OI               int64     `json:"oi"`
-	Timestamp        time.Time `json:"timestamp"`
-	NetChange        float64   `json:"netChange"`
-	NetChangePercent float64   `json:"netChangePercent"`
-	MarketStatus     string    `json:"market_status,omitempty"`
+	Exchange         string     `json:"exchange"`
+	Symbol           string     `json:"symbol"`
+	Expiry           *time.Time `json:"expiry,omitempty"`
+	StrikePrice      float64    `json:"strikePrice"`
+	LTP              float64    `json:"ltp"`
+	Open             float64    `json:"open"`
+	High             float64    `json:"high"`
+	Low              float64    `json:"low"`
+	Close            float64    `json:"close"`
+	BidPrice         float64    `json:"bidPrice"`
+	BidQty           int64      `json:"bidQty"`
+	BuyPrice         float64    `json:"buyPrice"`
+	BuyQty           int64      `json:"buyQty"`
+	AskPrice         float64    `json:"askPrice"`
+	AskQty           int64      `json:"askQty"`
+	SellPrice        float64    `json:"sellPrice"`
+	SellQty          int64      `json:"sellQty"`
+	TBQ              int64      `json:"tbq"`
+	TSQ              int64      `json:"tsq"`
+	OI               int64      `json:"oi"`
+	LowerCircuit     float64    `json:"lowerCkt"`
+	UpperCircuit     float64    `json:"upperCkt"`
+	LUT              time.Time  `json:"lut"`
+	Timestamp        time.Time  `json:"timestamp"`
+	NetChange        float64    `json:"netChange"`
+	NetChangePercent float64    `json:"netChangePercent"`
+	MarketStatus     string     `json:"market_status,omitempty"`
 }
 
 type MarketStateManager struct {
@@ -109,6 +118,19 @@ func roundTo2(value float64) float64 {
 }
 
 func applyDerivedFields(tick NormalizedTick) NormalizedTick {
+	if tick.BuyPrice == 0 {
+		tick.BuyPrice = tick.BidPrice
+	}
+	if tick.BuyQty == 0 {
+		tick.BuyQty = tick.BidQty
+	}
+	if tick.SellPrice == 0 {
+		tick.SellPrice = tick.AskPrice
+	}
+	if tick.SellQty == 0 {
+		tick.SellQty = tick.AskQty
+	}
+
 	if tick.Close > 0 {
 		tick.NetChange = tick.LTP - tick.Close
 		tick.NetChangePercent = (tick.NetChange / tick.Close) * 100

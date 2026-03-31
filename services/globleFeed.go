@@ -32,9 +32,16 @@ type GlobalMarketFeedService struct {
 
 	tickHub    *TickHub
 	redisCache *RedisTickCache
+	metaMu     sync.RWMutex
+	metaBySym  map[string]globalInstrumentMeta
 
 	marketState       *MarketStateManager
 	lastInboundTickAt atomic.Int64
+}
+
+type globalInstrumentMeta struct {
+	Expiry *time.Time
+	Strike float64
 }
 
 func uniqueSymbols(symbols []string) []string {
@@ -71,6 +78,7 @@ func NewGlobalMarketFeedService(db *gorm.DB, redisCache *RedisTickCache) *Global
 		db:          db,
 		marketState: NewMarketStateManager(),
 		redisCache:  redisCache,
+		metaBySym:   make(map[string]globalInstrumentMeta),
 	}
 	if redisCache != nil {
 		ticks := redisCache.Snapshot(context.Background(), GlobalTickPrefix, "")
@@ -93,9 +101,14 @@ func (g *GlobalMarketFeedService) Start(ctx context.Context, tickHub *TickHub) {
 	}
 
 	dialer := websocket.DefaultDialer
+	dialer.HandshakeTimeout = 10 * time.Second
 	headers := http.Header{}
 	headers.Set("x-api-key", g.apiKey)
-	conn, _, err := dialer.Dial(g.wsURL, headers)
+	
+	dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer dialCancel()
+	
+	conn, _, err := dialer.DialContext(dialCtx, g.wsURL, headers)
 	if err != nil {
 		log.Printf("global market feed: dial failed: %v", err)
 		return
@@ -104,6 +117,7 @@ func (g *GlobalMarketFeedService) Start(ctx context.Context, tickHub *TickHub) {
 
 	var symbols []string
 	if g.db != nil {
+		g.loadInstrumentMeta()
 		dbSymbols, err := models.GetActiveGlobalInstrumentSymbols(g.db)
 		if err != nil {
 			log.Printf("global market feed: failed to load active symbols: %v", err)
@@ -143,36 +157,63 @@ func (g *GlobalMarketFeedService) readLoop(tickHub *TickHub) {
 	for {
 		_, message, err := g.conn.ReadMessage()
 		if err != nil {
+			log.Printf("global market feed: readLoop error: %v", err)
 			return
 		}
 		var raw map[string]interface{}
 		if err := json.Unmarshal(message, &raw); err != nil {
+			log.Printf("global market feed: json unmarshal error: %v", err)
 			continue
 		}
+		now := time.Now().UTC()
+		symbol := strings.ToUpper(strings.TrimSpace(asString(raw["name"])))
+		if symbol == "" {
+			symbol = strings.ToUpper(strings.TrimSpace(asString(raw["symbol"])))
+		}
+		meta := g.getMeta(symbol)
+		bidPrice := firstNonZero(asFloat(raw["bidPrice"]), asFloat(raw["bid"]))
+		askPrice := firstNonZero(asFloat(raw["askPrice"]), asFloat(raw["ask"]))
+		bidQty := int64(firstNonZero(asFloat(raw["bidQty"]), asFloat(raw["buyQty"])))
+		askQty := int64(firstNonZero(asFloat(raw["askQty"]), asFloat(raw["sellQty"])))
 		tick := NormalizedTick{
 			Exchange:         asString(raw["exchange"]),
-			Symbol:           asString(raw["name"]),
+			Symbol:           symbol,
+			Expiry:           meta.Expiry,
+			StrikePrice:      firstNonZero(asFloat(raw["strikePrice"]), asFloat(raw["strike"]), meta.Strike),
 			LTP:              asFloat(raw["ltp"]),
 			Open:             asFloat(raw["open"]),
 			High:             asFloat(raw["high"]),
 			Low:              asFloat(raw["low"]),
 			Close:            asFloat(raw["close"]),
-			BidPrice:         asFloat(raw["bid"]),
-			AskPrice:         asFloat(raw["ask"]),
-			BidQty:           0,
-			AskQty:           0,
+			BidPrice:         bidPrice,
+			AskPrice:         askPrice,
+			BidQty:           bidQty,
+			AskQty:           askQty,
+			BuyPrice:         bidPrice,
+			BuyQty:           bidQty,
+			SellPrice:        askPrice,
+			SellQty:          askQty,
 			TBQ:              int64(asFloat(raw["tbq"])),
 			TSQ:              int64(asFloat(raw["tsq"])),
 			OI:               int64(asFloat(raw["oi"])),
-			Timestamp:        msToTime(raw["timestamp"]),
+			LowerCircuit:     firstNonZero(asFloat(raw["lowerCkt"]), asFloat(raw["lower_ckt"]), asFloat(raw["lowerCircuit"])),
+			UpperCircuit:     firstNonZero(asFloat(raw["upperCkt"]), asFloat(raw["upper_ckt"]), asFloat(raw["upperCircuit"])),
+			LUT:              now,
+			Timestamp:        msToTimeOrNow(raw["timestamp"], now),
 			NetChange:        asFloat(raw["ch"]),
 			NetChangePercent: asFloat(raw["chp"]),
 			MarketStatus:     MarketStatusOpen,
 		}
+		if tick.Symbol == "" {
+			log.Printf("global market feed: symbol empty, raw keys: %v", getMapKeys(raw))
+			continue
+		}
 		updated := g.marketState.Update(tick)
 		updated.MarketStatus = MarketStatusOpen
 		g.lastInboundTickAt.Store(time.Now().UnixNano())
-		tickHub.Publish(updated)
+		if tickHub != nil {
+			tickHub.Publish(updated)
+		}
 		if g.redisCache != nil && g.ctx != nil && g.ctx.Err() == nil {
 			g.redisCache.Set(g.ctx, GlobalTickPrefix, updated)
 		}
@@ -249,9 +290,72 @@ func asFloat(v interface{}) float64 {
 	return 0
 }
 
+func firstNonZero(values ...float64) float64 {
+	for _, v := range values {
+		if v != 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func (g *GlobalMarketFeedService) getMeta(symbol string) globalInstrumentMeta {
+	g.metaMu.RLock()
+	meta := g.metaBySym[symbol]
+	g.metaMu.RUnlock()
+	return meta
+}
+
+func (g *GlobalMarketFeedService) loadInstrumentMeta() {
+	if g.db == nil {
+		return
+	}
+
+	var instruments []models.GlobalInstrument
+	if err := g.db.
+		Select("symbol", "expiry", "strike", "status", "is_deleted").
+		Where("status = ? AND is_deleted = ?", models.GlobalInstrumentStatusActive, false).
+		Find(&instruments).Error; err != nil {
+		log.Printf("global market feed: failed to load instrument metadata: %v", err)
+		return
+	}
+
+	meta := make(map[string]globalInstrumentMeta, len(instruments))
+	for _, inst := range instruments {
+		symbol := strings.ToUpper(strings.TrimSpace(inst.Symbol))
+		if symbol == "" {
+			continue
+		}
+		meta[symbol] = globalInstrumentMeta{
+			Expiry: inst.Expiry,
+			Strike: inst.Strike,
+		}
+	}
+
+	g.metaMu.Lock()
+	g.metaBySym = meta
+	g.metaMu.Unlock()
+}
+
 func msToTime(v interface{}) time.Time {
 	ms := int64(asFloat(v))
 	return time.Unix(0, ms*int64(time.Millisecond))
+}
+
+func msToTimeOrNow(v interface{}, fallback time.Time) time.Time {
+	parsed := msToTime(v)
+	if parsed.IsZero() || parsed.Unix() <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func (g *GlobalMarketFeedService) Subscribe(symbols []string) error {

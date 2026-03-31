@@ -74,9 +74,11 @@ type ConnectionState string
 type TickMode string
 
 type instrumentMeta struct {
-	Mode     TickMode
-	Exchange string
-	Symbol   string
+	Mode        TickMode
+	Exchange    string
+	Symbol      string
+	Expiry      *time.Time
+	StrikePrice float64
 }
 
 type kiteErrorResponse struct {
@@ -898,10 +900,13 @@ func (s *ZerodhaFeedService) normalizePacket(packet []byte) (NormalizedTick, err
 
 	now := time.Now().UTC()
 	tick := NormalizedTick{
-		Exchange:  meta.Exchange,
-		Symbol:    meta.Symbol,
-		LTP:       ltp,
-		Timestamp: now,
+		Exchange:    meta.Exchange,
+		Symbol:      meta.Symbol,
+		Expiry:      meta.Expiry,
+		StrikePrice: meta.StrikePrice,
+		LTP:         ltp,
+		LUT:         now,
+		Timestamp:   now,
 	}
 
 	packetLen := len(packet)
@@ -970,7 +975,7 @@ func (s *ZerodhaFeedService) seedRegistryFromDatabase() {
 
 	var instruments []models.Instrument
 	if err := s.db.
-		Select("instrument_token", "trading_symbol", "segment", "exchange", "status", "is_deleted").
+		Select("instrument_token", "trading_symbol", "segment", "exchange", "status", "is_deleted", "expiry", "strike").
 		Where("is_deleted = ?", false).
 		Find(&instruments).Error; err != nil {
 		log.Printf("zerodha registry seed failed: %v", err)
@@ -998,9 +1003,11 @@ func (s *ZerodhaFeedService) seedRegistryFromDatabase() {
 		// Always use modeFull for all instruments to get bid/ask data
 		mode := modeFull
 		s.registry.Add(instrument.InstrumentToken, instrumentMeta{
-			Mode:     mode,
-			Exchange: exchange,
-			Symbol:   symbol,
+			Mode:        mode,
+			Exchange:    exchange,
+			Symbol:      symbol,
+			Expiry:      instrument.Expiry,
+			StrikePrice: instrument.Strike,
 		})
 	}
 
