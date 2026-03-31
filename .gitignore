@@ -7,3 +7,5 @@ REQUIREMENTS.md
 .git_locked_backup_*
 implemented.md
 instruments.csv
+feedprovider
+import_instruments_once
