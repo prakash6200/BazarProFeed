@@ -31,8 +31,17 @@ func seedDefaultAdmin(db *gorm.DB) {
 		return
 	}
 
-	adminUsername := "admin@gmail.com"
-	adminPassword := "Admin@123"
+	adminUsername := config.App.Admin.Username
+	adminPassword := config.App.Admin.Password
+
+	if adminUsername == "" {
+		adminUsername = "admin@gmail.com"
+		log.Println("WARNING: ADMIN_USERNAME not set, using default 'admin@gmail.com'. Set ADMIN_USERNAME in .env for production.")
+	}
+	if adminPassword == "" {
+		adminPassword = "Admin@123"
+		log.Println("WARNING: ADMIN_PASSWORD not set, using default password. Set ADMIN_PASSWORD in .env for production.")
+	}
 
 	admin, err := models.CreateUserWithPassword(db, adminUsername, adminPassword, models.RoleAdmin)
 	if err != nil {

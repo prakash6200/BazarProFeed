@@ -30,10 +30,16 @@ type ZerodhaConfig struct {
 	WSEndpoint   string
 }
 
+type AdminConfig struct {
+	Username string
+	Password string
+}
+
 type Configuration struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 	Zerodha  ZerodhaConfig
+	Admin    AdminConfig
 }
 
 var (
@@ -66,6 +72,10 @@ func LoadConfig() {
 				RequestToken: getEnv("ZERODHA_REQUEST_TOKEN", ""),
 				AccessToken:  getEnv("ZERODHA_ACCESS_TOKEN", ""),
 				WSEndpoint:   getEnv("ZERODHA_WS_ENDPOINT", "wss://ws.kite.trade"),
+			},
+			Admin: AdminConfig{
+				Username: getEnv("ADMIN_USERNAME", ""),
+				Password: getEnv("ADMIN_PASSWORD", ""),
 			},
 		}
 	})
