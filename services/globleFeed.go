@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"feedprovider/models"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -154,15 +155,42 @@ func (g *GlobalMarketFeedService) Start(ctx context.Context, tickHub *TickHub) {
 }
 
 func (g *GlobalMarketFeedService) readLoop(tickHub *TickHub) {
+	backoff := 1 * time.Second
+	maxBackoff := 30 * time.Second
+	
 	for {
-		_, message, err := g.conn.ReadMessage()
-		if err != nil {
-			log.Printf("global market feed: readLoop error: %v", err)
+		if g.ctx.Err() != nil {
+			log.Printf("global market feed: readLoop context cancelled, exiting")
 			return
 		}
+		
+		_, message, err := g.conn.ReadMessage()
+		if err != nil {
+			log.Printf("global market feed: readLoop error: %v, reconnecting in %v...", err, backoff)
+			
+			// Try to reconnect
+			select {
+			case <-time.After(backoff):
+				if reconnectErr := g.reconnect(); reconnectErr != nil {
+					log.Printf("global market feed: reconnect failed: %v", reconnectErr)
+					backoff = time.Duration(float64(backoff) * 1.5)
+					if backoff > maxBackoff {
+						backoff = maxBackoff
+					}
+					continue
+				}
+				log.Printf("global market feed: reconnected successfully, resetting backoff")
+				backoff = 1 * time.Second
+			case <-g.ctx.Done():
+				log.Printf("global market feed: readLoop context cancelled during reconnect")
+				return
+			}
+			continue
+		}
+		
 		var raw map[string]interface{}
 		if err := json.Unmarshal(message, &raw); err != nil {
-			log.Printf("global market feed: json unmarshal error: %v", err)
+			log.Printf("global market feed: json unmarshal error: %v, raw message: %s", err, string(message)[:200])
 			continue
 		}
 		now := time.Now().UTC()
@@ -232,6 +260,60 @@ func (g *GlobalMarketFeedService) rebroadcastStaleStateLoop() {
 			g.rebroadcastIfStale()
 		}
 	}
+}
+
+func (g *GlobalMarketFeedService) reconnect() error {
+	if g.wsURL == "" {
+		return fmt.Errorf("ws url not configured")
+	}
+
+	// Close old connection
+	if g.conn != nil {
+		_ = g.conn.Close()
+	}
+
+	// Establish new connection
+	dialer := websocket.DefaultDialer
+	dialer.HandshakeTimeout = 10 * time.Second
+	headers := http.Header{}
+	headers.Set("x-api-key", g.apiKey)
+
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer dialCancel()
+
+	conn, _, err := dialer.DialContext(dialCtx, g.wsURL, headers)
+	if err != nil {
+		return fmt.Errorf("dial failed: %w", err)
+	}
+	g.conn = conn
+
+	// Re-load metadata
+	g.loadInstrumentMeta()
+
+	// Re-subscribe to symbols
+	var symbols []string
+	if g.db != nil {
+		dbSymbols, _ := models.GetActiveGlobalInstrumentSymbols(g.db)
+		symbols = uniqueSymbols(dbSymbols)
+	}
+
+	if len(symbols) == 0 && g.redisCache != nil {
+		cached := g.redisCache.Snapshot(context.Background(), GlobalTickPrefix, "")
+		cachedSymbols := make([]string, 0, len(cached))
+		for _, tick := range cached {
+			cachedSymbols = append(cachedSymbols, tick.Symbol)
+		}
+		symbols = uniqueSymbols(cachedSymbols)
+	}
+
+	if len(symbols) > 0 {
+		if err := g.Subscribe(symbols); err != nil {
+			return fmt.Errorf("subscribe failed: %w", err)
+		}
+		log.Printf("global market feed: reconnected and re-subscribed to %d symbols", len(symbols))
+	}
+
+	return nil
 }
 
 func (g *GlobalMarketFeedService) rebroadcastIfStale() {
