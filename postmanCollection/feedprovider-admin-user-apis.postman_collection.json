@@ -212,6 +212,31 @@
           }
         },
         {
+          "name": "Import Global Instruments",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt_token}}" }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/global-instruments/import",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "global-instruments", "import"]
+            },
+            "description": "Bulk create or update global instruments from CSV/XLSX/XLSM file.\nConflict key: symbol. Existing row with same symbol will be updated.\nSupports your current sheet format with these columns in order:\n- instrument_token\n- exchange_token\n- tradingsymbol\n- name\n- subscribe_symbol_name\n- last_price\n- expiry (DD/MM/YY also supported)\n- last_price (used as strike column from the shared sheet format)\n- tick_size\n- lot_size\n- instrument_type\n- segment\n- exchange\n\nAlso supports extended format with symbol, strike, status, and is_deleted columns."
+          }
+        },
+        {
           "name": "Create Global Instrument",
           "event": [{
             "listen": "test",

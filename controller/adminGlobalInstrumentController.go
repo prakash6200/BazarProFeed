@@ -6,6 +6,10 @@ import (
 	"feedprovider/models"
 	"feedprovider/services"
 	"feedprovider/validator"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -19,6 +23,13 @@ type AdminGlobalInstrumentController struct {
 
 func NewAdminGlobalInstrumentController(db *gorm.DB, feedSvc services.MarketFeedProvider) *AdminGlobalInstrumentController {
 	return &AdminGlobalInstrumentController{DB: db, FeedSvc: feedSvc}
+}
+
+func (ctl *AdminGlobalInstrumentController) refreshFeed() error {
+	if ctl.FeedSvc == nil {
+		return nil
+	}
+	return ctl.FeedSvc.RefreshFromDatabase(context.Background())
 }
 
 func (ctl *AdminGlobalInstrumentController) List(c *fiber.Ctx) error {
@@ -71,6 +82,92 @@ func (ctl *AdminGlobalInstrumentController) List(c *fiber.Ctx) error {
 	})
 }
 
+func (ctl *AdminGlobalInstrumentController) Import(c *fiber.Ctx) error {
+	uploadFile, err := c.FormFile("file")
+	if err != nil || uploadFile == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "file is required in form-data",
+			"error":       "file is required in form-data",
+		})
+	}
+
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(uploadFile.Filename)))
+	if ext != ".csv" && ext != ".xlsx" && ext != ".xlsm" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "only csv, xlsx, and xlsm file upload is allowed",
+			"error":       "only csv, xlsx, and xlsm file upload is allowed",
+		})
+	}
+
+	uploaded, err := uploadFile.Open()
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "failed to read uploaded file",
+			"error":       "failed to read uploaded file",
+		})
+	}
+	defer uploaded.Close()
+
+	tempFile, err := os.CreateTemp("", "global-instruments-*"+ext)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to create temporary file for upload",
+			"error":       "failed to create temporary file for upload",
+		})
+	}
+
+	if _, err := io.Copy(tempFile, uploaded); err != nil {
+		_ = tempFile.Close()
+		_ = os.Remove(tempFile.Name())
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to save uploaded file",
+			"error":       "failed to save uploaded file",
+		})
+	}
+
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tempFile.Name())
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to finalize uploaded file",
+			"error":       "failed to finalize uploaded file",
+		})
+	}
+
+	filePath := tempFile.Name()
+	defer os.Remove(filePath)
+
+	result, err := models.ImportGlobalInstrumentsFromFile(ctl.DB, filePath)
+	if err != nil {
+		log.Printf("error importing global instruments from file %s: %v", filePath, err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to import global instruments",
+			"error":       err.Error(),
+		})
+	}
+
+	if err := ctl.refreshFeed(); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "global instruments imported but feed sync failed",
+			"error":       "global instruments imported but feed sync failed",
+		})
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"message":     "global instruments imported successfully",
+		"file_name":   uploadFile.Filename,
+		"result":      result,
+	})
+}
+
 // Create
 func (ctl *AdminGlobalInstrumentController) Create(c *fiber.Ctx) error {
 	var req models.GlobalInstrument
@@ -101,7 +198,7 @@ func (ctl *AdminGlobalInstrumentController) Create(c *fiber.Ctx) error {
 			"error":       message,
 		})
 	}
-	if err := ctl.FeedSvc.RefreshFromDatabase(context.Background()); err != nil {
+	if err := ctl.refreshFeed(); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "global instrument created but feed sync failed",
@@ -172,7 +269,7 @@ func (ctl *AdminGlobalInstrumentController) Update(c *fiber.Ctx) error {
 			"error":       "failed to update global instrument",
 		})
 	}
-	if err := ctl.FeedSvc.RefreshFromDatabase(context.Background()); err != nil {
+	if err := ctl.refreshFeed(); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "global instrument updated but feed sync failed",
