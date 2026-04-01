@@ -587,7 +587,7 @@
                 }
               ]
             },
-            "description": "Admin-only paginated instrument list with filters.\nQuery:\n- page: positive int\n- limit: positive int, max 100\n- include_deleted: true/false\n- instrument_type enum: CE, EQ, FUT, PE\n- segment enum: INDICES, MCX-FUT, MCX-OPT, NCO-FUT, NFO-FUT, NFO-OPT\n- exchange enum: MCX, NCO, NFO\n- status enum: ACTIVE, INACTIVE\n- expiry: dd-mm-yy\n- search: token/symbol/name partial match"
+            "description": "Admin-only paginated instrument list with filters.\nQuery:\n- page: positive int\n- limit: positive int, max 100\n- include_deleted: true/false\n- instrument_type enum: CE, EQ, FUT, PE\n- segment enum: INDICES, CDS-FUT, CDS-OPT, MCX-FUT, MCX-OPT, NCO-FUT, NFO-FUT, NFO-OPT\n- exchange enum: CDS, MCX, NCO, NFO\n- status enum: ACTIVE, INACTIVE\n- expiry: dd-mm-yy\n- search: token/symbol/name partial match"
           },
           "response": []
         },

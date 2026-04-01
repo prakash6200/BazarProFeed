@@ -74,6 +74,8 @@ var allowedInstrumentTypes = map[string]struct{}{
 
 var allowedSegments = map[string]struct{}{
 	"INDICES": {},
+	"CDS-FUT": {},
+	"CDS-OPT": {},
 	"MCX-FUT": {},
 	"MCX-OPT": {},
 	"NCO-FUT": {},
@@ -82,6 +84,7 @@ var allowedSegments = map[string]struct{}{
 }
 
 var allowedExchanges = map[string]struct{}{
+	"CDS": {},
 	"MCX": {},
 	"NCO": {},
 	"NFO": {},
