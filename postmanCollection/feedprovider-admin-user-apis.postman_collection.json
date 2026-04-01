@@ -193,7 +193,7 @@
               { "key": "Authorization", "value": "Bearer {{jwt_token}}" }
             ],
             "url": {
-              "raw": "{{base_url}}/admin/global-instruments?page=1&limit=20&include_deleted=false&status=ACTIVE&search=GBP",
+              "raw": "{{base_url}}/admin/global-instruments?page=1&limit=20&include_deleted=false&status=ACTIVE&segment=FOREX&exchange=FOREX&instrument_type=SPOT&search=GBP",
               "host": ["{{base_url}}"],
               "path": ["admin", "global-instruments"],
               "query": [
@@ -201,10 +201,14 @@
                 { "key": "limit", "value": "20" },
                 { "key": "include_deleted", "value": "false" },
                 { "key": "status", "value": "ACTIVE" },
-                { "key": "search", "value": "GBP" }
+                { "key": "segment", "value": "FOREX" },
+                { "key": "exchange", "value": "FOREX" },
+                { "key": "instrument_type", "value": "SPOT" },
+                { "key": "search", "value": "GBP" },
+                { "key": "expiry", "value": "2026-05-26" }
               ]
             },
-            "description": "Paginated list of global instruments.\nSupported query params:\n- page\n- limit\n- include_deleted\n- status: ACTIVE or INACTIVE\n- search: matches symbol or name\n\nResponse shape matches admin instruments list with status_code, message, instruments, and pagination."
+            "description": "Paginated list of global instruments.\nDefault request can use only page and limit.\nSupported optional query params:\n- include_deleted\n- status: ACTIVE or INACTIVE\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- instrument_type\n- expiry: YYYY-MM-DD, DD-MM-YYYY, DD-MM-YY, or RFC3339\n- search: matches symbol, subscribe_symbol_name, tradingsymbol, or name\n\nResponse shape matches admin instruments list with status_code, message, instruments, and pagination."
           }
         },
         {
@@ -215,7 +219,7 @@
               "type": "text/javascript",
               "exec": [
                 "let r = pm.response.json();",
-                "if (r && r.id) pm.collectionVariables.set('global_instrument_id', r.id);"
+                "if (r && r.global_instrument && r.global_instrument.id) pm.collectionVariables.set('global_instrument_id', r.global_instrument.id);"
               ]
             }
           }],
@@ -227,14 +231,14 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"symbol\": \"GBPUSD\",\n  \"name\": \"British Pound/USD\",\n  \"status\": \"ACTIVE\"\n}"
+              "raw": "{\n  \"instrument_token\": 101001,\n  \"exchange_token\": 501001,\n  \"tradingsymbol\": \"GBPUSD\",\n  \"name\": \"British Pound/USD\",\n  \"subscribe_symbol_name\": \"GBPUSD\",\n  \"symbol\": \"GBPUSD\",\n  \"last_price\": 1.2765,\n  \"expiry\": null,\n  \"tick_size\": 0.0001,\n  \"lot_size\": 1,\n  \"instrument_type\": \"SPOT\",\n  \"segment\": \"FOREX\",\n  \"exchange\": \"FOREX\",\n  \"strike\": 0,\n  \"status\": \"ACTIVE\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/admin/global-instruments",
               "host": ["{{base_url}}"],
               "path": ["admin", "global-instruments"]
             },
-            "description": "Create a new global instrument.\nBody fields:\n- symbol: required\n- name: optional\n- status: ACTIVE or INACTIVE"
+            "description": "Create a new global instrument.\nBody fields:\n- symbol: required (auto-derived from subscribe_symbol_name or tradingsymbol if empty)\n- instrument_token, exchange_token, tradingsymbol, subscribe_symbol_name\n- last_price, expiry, tick_size, lot_size, instrument_type, strike\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- status: ACTIVE or INACTIVE"
           }
         },
         {
@@ -247,14 +251,14 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"symbol\": \"GBPUSD\",\n  \"name\": \"British Pound/USD\",\n  \"status\": \"INACTIVE\",\n  \"is_deleted\": true\n}"
+              "raw": "{\n  \"instrument_token\": 101001,\n  \"exchange_token\": 501001,\n  \"tradingsymbol\": \"GBPUSD\",\n  \"name\": \"British Pound/USD\",\n  \"subscribe_symbol_name\": \"GBPUSD\",\n  \"symbol\": \"GBPUSD\",\n  \"last_price\": 1.278,\n  \"expiry\": null,\n  \"tick_size\": 0.0001,\n  \"lot_size\": 1,\n  \"instrument_type\": \"SPOT\",\n  \"segment\": \"FOREX\",\n  \"exchange\": \"FOREX\",\n  \"strike\": 0,\n  \"status\": \"INACTIVE\",\n  \"is_deleted\": true\n}"
             },
             "url": {
               "raw": "{{base_url}}/admin/global-instruments/{{global_instrument_id}}",
               "host": ["{{base_url}}"],
               "path": ["admin", "global-instruments", "{{global_instrument_id}}"]
             },
-            "description": "Update, soft delete, or undelete a global instrument by ID.\nSet is_deleted=true for soft delete, false for undelete."
+            "description": "Update, soft delete, or undelete a global instrument by ID.\nSupports full global instrument model fields including token/symbol metadata and enums.\nSet is_deleted=true for soft delete, false for undelete."
           }
         },
         {

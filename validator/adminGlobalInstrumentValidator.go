@@ -5,6 +5,7 @@ import (
 	"feedprovider/models"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -14,21 +15,56 @@ var allowedGlobalInstrumentStatuses = map[string]struct{}{
 	models.GlobalInstrumentStatusInactive: {},
 }
 
+var allowedGlobalInstrumentSegments = map[string]struct{}{
+	models.GlobalInstrumentSegmentOthers:  {},
+	models.GlobalInstrumentSegmentUSStock: {},
+	models.GlobalInstrumentSegmentComex:   {},
+	models.GlobalInstrumentSegmentCrypto:  {},
+	models.GlobalInstrumentSegmentForex:   {},
+	models.GlobalInstrumentSegmentGift:    {},
+}
+
+var allowedGlobalInstrumentExchanges = map[string]struct{}{
+	models.GlobalInstrumentExchangeOthers:  {},
+	models.GlobalInstrumentExchangeUSStock: {},
+	models.GlobalInstrumentExchangeComex:   {},
+	models.GlobalInstrumentExchangeCrypto:  {},
+	models.GlobalInstrumentExchangeForex:   {},
+	models.GlobalInstrumentExchangeGift:    {},
+}
+
 func normalizeGlobalInstrumentStatus(value string) string {
 	return strings.ToUpper(strings.TrimSpace(value))
 }
 
 func ValidateGlobalInstrument(inst *models.GlobalInstrument) error {
+	inst.TradingSymbol = strings.TrimSpace(inst.TradingSymbol)
+	inst.SubscribeSymbolName = strings.ToUpper(strings.TrimSpace(inst.SubscribeSymbolName))
+	if strings.TrimSpace(inst.Symbol) == "" {
+		inst.Symbol = inst.SubscribeSymbolName
+	}
+	if strings.TrimSpace(inst.Symbol) == "" {
+		inst.Symbol = strings.ToUpper(inst.TradingSymbol)
+	}
 	if strings.TrimSpace(inst.Symbol) == "" {
 		return errors.New("symbol is required")
 	}
 
 	inst.Symbol = strings.ToUpper(strings.TrimSpace(inst.Symbol))
 	inst.Name = strings.TrimSpace(inst.Name)
+	inst.InstrumentType = strings.ToUpper(strings.TrimSpace(inst.InstrumentType))
 	inst.Status = normalizeGlobalInstrumentStatus(inst.Status)
+	inst.Segment = models.NormalizeGlobalInstrumentSegment(inst.Segment)
+	inst.Exchange = models.NormalizeGlobalInstrumentExchange(inst.Exchange)
 
 	if _, ok := allowedGlobalInstrumentStatuses[inst.Status]; !ok {
 		return errors.New("status must be ACTIVE or INACTIVE")
+	}
+	if _, ok := allowedGlobalInstrumentSegments[inst.Segment]; !ok {
+		return errors.New("segment must be one of: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT")
+	}
+	if _, ok := allowedGlobalInstrumentExchanges[inst.Exchange]; !ok {
+		return errors.New("exchange must be one of: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT")
 	}
 	return nil
 }
@@ -38,6 +74,10 @@ type GlobalInstrumentListQueryRequest struct {
 	Limit          int
 	IncludeDeleted bool
 	Status         string
+	Segment        string
+	Exchange       string
+	InstrumentType string
+	Expiry         string
 	Search         string
 }
 
@@ -88,10 +128,9 @@ func ValidateListGlobalInstrumentsQuery(c *fiber.Ctx) error {
 		includeDeleted = parsed
 	}
 
-	status := normalizeGlobalInstrumentStatus(c.Query("status"))
-	search := strings.TrimSpace(c.Query("search"))
-
-	if status != "" {
+	status := ""
+	if rawStatus := strings.TrimSpace(c.Query("status")); rawStatus != "" {
+		status = normalizeGlobalInstrumentStatus(rawStatus)
 		if _, ok := allowedGlobalInstrumentStatuses[status]; !ok {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"status_code": fiber.StatusBadRequest,
@@ -100,6 +139,53 @@ func ValidateListGlobalInstrumentsQuery(c *fiber.Ctx) error {
 			})
 		}
 	}
+
+	segment := ""
+	if rawSegment := strings.TrimSpace(c.Query("segment")); rawSegment != "" {
+		segment = strings.ToUpper(rawSegment)
+		if _, ok := allowedGlobalInstrumentSegments[segment]; !ok {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "segment must be one of: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT",
+				"error":       "segment must be one of: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT",
+			})
+		}
+	}
+
+	exchange := ""
+	if rawExchange := strings.TrimSpace(c.Query("exchange")); rawExchange != "" {
+		exchange = strings.ToUpper(rawExchange)
+		if _, ok := allowedGlobalInstrumentExchanges[exchange]; !ok {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "exchange must be one of: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT",
+				"error":       "exchange must be one of: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT",
+			})
+		}
+	}
+
+	instrumentType := strings.ToUpper(strings.TrimSpace(c.Query("instrument_type")))
+	expiry := ""
+	if rawExpiry := strings.TrimSpace(c.Query("expiry")); rawExpiry != "" {
+		var parsed time.Time
+		var parseErr error
+		layouts := []string{"2006-01-02", "02-01-2006", "02-01-06", time.RFC3339}
+		for _, layout := range layouts {
+			parsed, parseErr = time.Parse(layout, rawExpiry)
+			if parseErr == nil {
+				expiry = parsed.Format("2006-01-02")
+				break
+			}
+		}
+		if expiry == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "expiry must be in YYYY-MM-DD, DD-MM-YYYY, DD-MM-YY, or RFC3339 format",
+				"error":       "expiry must be in YYYY-MM-DD, DD-MM-YYYY, DD-MM-YY, or RFC3339 format",
+			})
+		}
+	}
+	search := strings.TrimSpace(c.Query("search"))
 
 	if len(search) > 100 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -114,6 +200,10 @@ func ValidateListGlobalInstrumentsQuery(c *fiber.Ctx) error {
 		Limit:          limit,
 		IncludeDeleted: includeDeleted,
 		Status:         status,
+		Segment:        segment,
+		Exchange:       exchange,
+		InstrumentType: instrumentType,
+		Expiry:         expiry,
 		Search:         search,
 	})
 

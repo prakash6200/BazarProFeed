@@ -28,6 +28,14 @@ BEGIN
 	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'instrument_status') THEN
 		CREATE TYPE instrument_status AS ENUM ('ACTIVE', 'INACTIVE');
 	END IF;
+
+	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'global_market_segment') THEN
+		CREATE TYPE global_market_segment AS ENUM ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
+	END IF;
+
+	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'global_market_exchange') THEN
+		CREATE TYPE global_market_exchange AS ENUM ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
+	END IF;
 END
 $$;`
 
@@ -131,7 +139,97 @@ BEGIN
 END
 $$;`
 
-	return db.Exec(convertInstrumentStatusSQL).Error
+	if err := db.Exec(convertInstrumentStatusSQL).Error; err != nil {
+		return err
+	}
+
+	convertGlobalMarketEnumSQL := `
+DO $$
+DECLARE
+	segment_udt text;
+	exchange_udt text;
+BEGIN
+	IF EXISTS (
+		SELECT 1
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'global_instruments'
+		  AND column_name = 'segment'
+	) THEN
+		SELECT udt_name
+		INTO segment_udt
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'global_instruments'
+		  AND column_name = 'segment'
+		LIMIT 1;
+
+		IF segment_udt = 'global_market_segment' THEN
+			UPDATE global_instruments
+			SET segment = 'OTHERS'::global_market_segment
+			WHERE segment IS NULL OR UPPER(segment::text) NOT IN ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
+		ELSE
+			UPDATE global_instruments
+			SET segment = 'OTHERS'
+			WHERE segment IS NULL OR UPPER(TRIM(segment::text)) NOT IN ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
+
+			ALTER TABLE global_instruments
+				ALTER COLUMN segment DROP DEFAULT;
+
+			ALTER TABLE global_instruments
+				ALTER COLUMN segment TYPE global_market_segment
+				USING UPPER(TRIM(segment::text))::global_market_segment;
+		END IF;
+
+		ALTER TABLE global_instruments
+			ALTER COLUMN segment SET DEFAULT 'OTHERS';
+
+		ALTER TABLE global_instruments
+			ALTER COLUMN segment SET NOT NULL;
+	END IF;
+
+	IF EXISTS (
+		SELECT 1
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'global_instruments'
+		  AND column_name = 'exchange'
+	) THEN
+		SELECT udt_name
+		INTO exchange_udt
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'global_instruments'
+		  AND column_name = 'exchange'
+		LIMIT 1;
+
+		IF exchange_udt = 'global_market_exchange' THEN
+			UPDATE global_instruments
+			SET exchange = 'OTHERS'::global_market_exchange
+			WHERE exchange IS NULL OR UPPER(exchange::text) NOT IN ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
+		ELSE
+			UPDATE global_instruments
+			SET exchange = 'OTHERS'
+			WHERE exchange IS NULL OR UPPER(TRIM(exchange::text)) NOT IN ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
+
+			ALTER TABLE global_instruments
+				ALTER COLUMN exchange DROP DEFAULT;
+
+			ALTER TABLE global_instruments
+				ALTER COLUMN exchange TYPE global_market_exchange
+				USING UPPER(TRIM(exchange::text))::global_market_exchange;
+		END IF;
+
+		ALTER TABLE global_instruments
+			ALTER COLUMN exchange SET DEFAULT 'OTHERS';
+
+		ALTER TABLE global_instruments
+			ALTER COLUMN exchange SET NOT NULL;
+	END IF;
+END
+$$;`
+
+	return db.Exec(convertGlobalMarketEnumSQL).Error
 }
 
 func ConnectDatabase() {

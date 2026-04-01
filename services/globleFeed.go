@@ -105,10 +105,10 @@ func (g *GlobalMarketFeedService) Start(ctx context.Context, tickHub *TickHub) {
 	dialer.HandshakeTimeout = 10 * time.Second
 	headers := http.Header{}
 	headers.Set("x-api-key", g.apiKey)
-	
+
 	dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer dialCancel()
-	
+
 	conn, _, err := dialer.DialContext(dialCtx, g.wsURL, headers)
 	if err != nil {
 		log.Printf("global market feed: dial failed: %v", err)
@@ -116,29 +116,7 @@ func (g *GlobalMarketFeedService) Start(ctx context.Context, tickHub *TickHub) {
 	}
 	g.conn = conn
 
-	var symbols []string
-	if g.db != nil {
-		g.loadInstrumentMeta()
-		dbSymbols, err := models.GetActiveGlobalInstrumentSymbols(g.db)
-		if err != nil {
-			log.Printf("global market feed: failed to load active symbols: %v", err)
-		} else {
-			symbols = uniqueSymbols(dbSymbols)
-		}
-	}
-
-	// Fallback: if DB has no ACTIVE symbols, subscribe symbols from redis snapshot.
-	if len(symbols) == 0 && g.redisCache != nil {
-		cached := g.redisCache.Snapshot(context.Background(), GlobalTickPrefix, "")
-		cachedSymbols := make([]string, 0, len(cached))
-		for _, tick := range cached {
-			cachedSymbols = append(cachedSymbols, tick.Symbol)
-		}
-		symbols = uniqueSymbols(cachedSymbols)
-		if len(symbols) > 0 {
-			log.Printf("global market feed: DB has no ACTIVE symbols, using %d redis-cached symbols", len(symbols))
-		}
-	}
+	symbols := g.subscriptionSymbols()
 
 	if len(symbols) == 0 {
 		log.Printf("global market feed: no symbols available for subscription")
@@ -157,17 +135,17 @@ func (g *GlobalMarketFeedService) Start(ctx context.Context, tickHub *TickHub) {
 func (g *GlobalMarketFeedService) readLoop(tickHub *TickHub) {
 	backoff := 1 * time.Second
 	maxBackoff := 30 * time.Second
-	
+
 	for {
 		if g.ctx.Err() != nil {
 			log.Printf("global market feed: readLoop context cancelled, exiting")
 			return
 		}
-		
+
 		_, message, err := g.conn.ReadMessage()
 		if err != nil {
 			log.Printf("global market feed: readLoop error: %v, reconnecting in %v...", err, backoff)
-			
+
 			// Try to reconnect
 			select {
 			case <-time.After(backoff):
@@ -187,7 +165,7 @@ func (g *GlobalMarketFeedService) readLoop(tickHub *TickHub) {
 			}
 			continue
 		}
-		
+
 		var raw map[string]interface{}
 		if err := json.Unmarshal(message, &raw); err != nil {
 			log.Printf("global market feed: json unmarshal error: %v, raw message: %s", err, string(message)[:200])
@@ -287,24 +265,8 @@ func (g *GlobalMarketFeedService) reconnect() error {
 	}
 	g.conn = conn
 
-	// Re-load metadata
-	g.loadInstrumentMeta()
-
-	// Re-subscribe to symbols
-	var symbols []string
-	if g.db != nil {
-		dbSymbols, _ := models.GetActiveGlobalInstrumentSymbols(g.db)
-		symbols = uniqueSymbols(dbSymbols)
-	}
-
-	if len(symbols) == 0 && g.redisCache != nil {
-		cached := g.redisCache.Snapshot(context.Background(), GlobalTickPrefix, "")
-		cachedSymbols := make([]string, 0, len(cached))
-		for _, tick := range cached {
-			cachedSymbols = append(cachedSymbols, tick.Symbol)
-		}
-		symbols = uniqueSymbols(cachedSymbols)
-	}
+	// Re-load metadata and rebuild symbol list.
+	symbols := g.subscriptionSymbols()
 
 	if len(symbols) > 0 {
 		if err := g.Subscribe(symbols); err != nil {
@@ -396,6 +358,33 @@ func (g *GlobalMarketFeedService) getMeta(symbol string) globalInstrumentMeta {
 	return meta
 }
 
+func (g *GlobalMarketFeedService) subscriptionSymbols() []string {
+	merged := make([]string, 0)
+
+	if g.db != nil {
+		g.loadInstrumentMeta()
+		dbSymbols, err := models.GetActiveGlobalInstrumentSymbols(g.db)
+		if err != nil {
+			log.Printf("global market feed: failed to load active symbols: %v", err)
+		} else {
+			merged = append(merged, dbSymbols...)
+		}
+	}
+
+	if g.redisCache != nil {
+		cached := g.redisCache.Snapshot(context.Background(), GlobalTickPrefix, "")
+		for _, tick := range cached {
+			merged = append(merged, tick.Symbol)
+		}
+	}
+
+	symbols := uniqueSymbols(merged)
+	if len(symbols) > 0 {
+		log.Printf("global market feed: prepared %d subscription symbols", len(symbols))
+	}
+	return symbols
+}
+
 func (g *GlobalMarketFeedService) loadInstrumentMeta() {
 	if g.db == nil {
 		return
@@ -444,6 +433,13 @@ func (g *GlobalMarketFeedService) Subscribe(symbols []string) error {
 	if g.conn == nil {
 		return nil
 	}
+	if g.db != nil {
+		g.loadInstrumentMeta()
+	}
+	symbols = uniqueSymbols(symbols)
+	if len(symbols) == 0 {
+		return nil
+	}
 	msg := map[string]interface{}{
 		"event":   "subscribe",
 		"symbols": symbols,
@@ -455,6 +451,10 @@ func (g *GlobalMarketFeedService) Subscribe(symbols []string) error {
 
 func (g *GlobalMarketFeedService) Unsubscribe(symbols []string) error {
 	if g.conn == nil {
+		return nil
+	}
+	symbols = uniqueSymbols(symbols)
+	if len(symbols) == 0 {
 		return nil
 	}
 	msg := map[string]interface{}{
