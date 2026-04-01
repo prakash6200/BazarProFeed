@@ -135,6 +135,22 @@ func (r *subscriptionRegistry) Get(token int64) (instrumentMeta, bool) {
 	return meta, ok
 }
 
+func (r *subscriptionRegistry) Set(token int64, meta instrumentMeta) {
+	r.mu.Lock()
+	r.items[token] = meta
+	r.mu.Unlock()
+}
+
+func (r *subscriptionRegistry) SnapshotItems() map[int64]instrumentMeta {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make(map[int64]instrumentMeta, len(r.items))
+	for token, meta := range r.items {
+		result[token] = meta
+	}
+	return result
+}
+
 func (r *subscriptionRegistry) SnapshotTokens() []int64 {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -973,11 +989,8 @@ func (s *ZerodhaFeedService) seedRegistryFromDatabase() {
 		return
 	}
 
-	var instruments []models.Instrument
-	if err := s.db.
-		Select("instrument_token", "trading_symbol", "segment", "exchange", "status", "is_deleted", "expiry", "strike").
-		Where("is_deleted = ?", false).
-		Find(&instruments).Error; err != nil {
+	instruments, err := models.GetActiveInstrumentsForFeed(s.db)
+	if err != nil {
 		log.Printf("zerodha registry seed failed: %v", err)
 		return
 	}
@@ -1012,6 +1025,89 @@ func (s *ZerodhaFeedService) seedRegistryFromDatabase() {
 	}
 
 	log.Printf("zerodha registry seeded from database with %d instruments", len(s.registry.SnapshotTokens()))
+}
+
+func (s *ZerodhaFeedService) RefreshFromDatabase(ctx context.Context) error {
+	if s.db == nil {
+		return nil
+	}
+
+	instruments, err := models.GetActiveInstrumentsForFeed(s.db)
+	if err != nil {
+		return fmt.Errorf("load active zerodha instruments failed: %w", err)
+	}
+
+	desired := make(map[int64]instrumentMeta, len(instruments))
+	for _, instrument := range instruments {
+		if instrument.InstrumentToken <= 0 {
+			continue
+		}
+
+		exchange := strings.ToUpper(strings.TrimSpace(instrument.Exchange))
+		if exchange == "" {
+			exchange = "UNKNOWN"
+		}
+
+		symbol := strings.TrimSpace(instrument.TradingSymbol)
+		if symbol == "" {
+			symbol = strconv.FormatInt(instrument.InstrumentToken, 10)
+		}
+
+		desired[instrument.InstrumentToken] = instrumentMeta{
+			Mode:        modeFull,
+			Exchange:    exchange,
+			Symbol:      symbol,
+			Expiry:      instrument.Expiry,
+			StrikePrice: instrument.Strike,
+		}
+	}
+
+	existing := s.registry.SnapshotItems()
+	toUnsub := make([]int64, 0)
+	toSub := make([]int64, 0)
+
+	for token := range existing {
+		if _, ok := desired[token]; !ok {
+			if s.registry.Remove(token) {
+				toUnsub = append(toUnsub, token)
+			}
+		}
+	}
+
+	for token, meta := range desired {
+		if _, ok := existing[token]; !ok {
+			if s.registry.Add(token, meta) {
+				toSub = append(toSub, token)
+			}
+			continue
+		}
+		s.registry.Set(token, meta)
+	}
+
+	conn := s.getConn()
+	if conn != nil {
+		if len(toUnsub) > 0 {
+			if err := s.writeJSON(conn, map[string]any{"a": "unsubscribe", "v": toUnsub}); err != nil {
+				return fmt.Errorf("zerodha unsubscribe failed: %w", err)
+			}
+		}
+		if len(toSub) > 0 {
+			if err := s.writeJSON(conn, map[string]any{"a": "subscribe", "v": toSub}); err != nil {
+				return fmt.Errorf("zerodha subscribe failed: %w", err)
+			}
+			if err := s.writeJSON(conn, map[string]any{"a": "mode", "v": []any{string(modeFull), toSub}}); err != nil {
+				return fmt.Errorf("zerodha mode update failed: %w", err)
+			}
+		}
+	}
+
+	if !s.running.Load() && len(desired) > 0 && s.baseCtx != nil && s.baseCtx.Err() == nil {
+		go s.Start(s.baseCtx)
+	}
+
+	log.Printf("zerodha feed refreshed from DB: active=%d unsubscribed=%d subscribed=%d", len(desired), len(toUnsub), len(toSub))
+	_ = ctx
+	return nil
 }
 
 func (s *ZerodhaFeedService) setConnectionState(state ConnectionState) {

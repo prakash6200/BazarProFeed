@@ -93,7 +93,7 @@ func main() {
 	}))
 
 	adminController := controller.NewAdminController(config.DB, socketHub)
-	instrumentController := controller.NewAdminInstrumentController(config.DB)
+	instrumentController := controller.NewAdminInstrumentController(config.DB, zerodhaFeedService)
 	globalInstrumentController := controller.NewAdminGlobalInstrumentController(config.DB, globMarketFeedService)
 	zerodhaController := controller.NewAdminZerodhaController(config.DB, zerodhaFeedService)
 	userController := controller.NewUserController(config.DB, socketHub)

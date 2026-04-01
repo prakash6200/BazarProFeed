@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"feedprovider/models"
+	"feedprovider/services"
 	"feedprovider/validator"
 	"io"
 	"log"
@@ -16,11 +18,19 @@ import (
 )
 
 type AdminInstrumentController struct {
-	db *gorm.DB
+	db          *gorm.DB
+	zerodhaFeed *services.ZerodhaFeedService
 }
 
-func NewAdminInstrumentController(db *gorm.DB) *AdminInstrumentController {
-	return &AdminInstrumentController{db: db}
+func NewAdminInstrumentController(db *gorm.DB, zerodhaFeed *services.ZerodhaFeedService) *AdminInstrumentController {
+	return &AdminInstrumentController{db: db, zerodhaFeed: zerodhaFeed}
+}
+
+func (ic *AdminInstrumentController) refreshZerodhaFeed() error {
+	if ic.zerodhaFeed == nil {
+		return nil
+	}
+	return ic.zerodhaFeed.RefreshFromDatabase(context.Background())
 }
 
 func parseInstrumentExpiry(value string) (*time.Time, error) {
@@ -103,6 +113,14 @@ func (ic *AdminInstrumentController) ImportInstruments(c *fiber.Ctx) error {
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "failed to import instruments",
 			"error":       err.Error(),
+		})
+	}
+
+	if err := ic.refreshZerodhaFeed(); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "instruments imported but zerodha feed sync failed",
+			"error":       "instruments imported but zerodha feed sync failed",
 		})
 	}
 
@@ -228,6 +246,14 @@ func (ic *AdminInstrumentController) CreateInstrument(c *fiber.Ctx) error {
 		})
 	}
 
+	if err := ic.refreshZerodhaFeed(); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "instrument created but zerodha feed sync failed",
+			"error":       "instrument created but zerodha feed sync failed",
+		})
+	}
+
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"status_code": fiber.StatusCreated,
 		"message":     "instrument created successfully",
@@ -312,6 +338,14 @@ func (ic *AdminInstrumentController) UpdateInstrument(c *fiber.Ctx) error {
 		})
 	}
 
+	if err := ic.refreshZerodhaFeed(); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "instrument updated but zerodha feed sync failed",
+			"error":       "instrument updated but zerodha feed sync failed",
+		})
+	}
+
 	instrument, err := models.GetInstrumentByID(ic.db, instrumentID)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -352,6 +386,14 @@ func (ic *AdminInstrumentController) DeleteInstrument(c *fiber.Ctx) error {
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "failed to soft delete instrument",
 			"error":       "failed to soft delete instrument",
+		})
+	}
+
+	if err := ic.refreshZerodhaFeed(); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "instrument deleted but zerodha feed sync failed",
+			"error":       "instrument deleted but zerodha feed sync failed",
 		})
 	}
 

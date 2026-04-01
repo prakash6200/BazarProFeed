@@ -414,3 +414,13 @@ func SoftDeleteInstrumentByID(db *gorm.DB, id string) error {
 		Where("id = ? AND is_deleted = ?", id, false).
 		Updates(map[string]interface{}{"is_deleted": true, "status": InstrumentStatusInactive}).Error
 }
+
+func GetActiveInstrumentsForFeed(db *gorm.DB) ([]Instrument, error) {
+	var instruments []Instrument
+	err := db.
+		Select("instrument_token", "trading_symbol", "exchange", "status", "is_deleted", "expiry", "strike").
+		Where("is_deleted = ?", false).
+		Where("status = ?", InstrumentStatusActive).
+		Find(&instruments).Error
+	return instruments, err
+}

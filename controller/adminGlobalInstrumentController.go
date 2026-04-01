@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"feedprovider/models"
 	"feedprovider/services"
@@ -100,12 +101,12 @@ func (ctl *AdminGlobalInstrumentController) Create(c *fiber.Ctx) error {
 			"error":       message,
 		})
 	}
-	subscribeSymbol := strings.TrimSpace(req.SubscribeSymbolName)
-	if subscribeSymbol == "" {
-		subscribeSymbol = strings.TrimSpace(req.Symbol)
-	}
-	if req.IsActive() {
-		ctl.FeedSvc.Subscribe([]string{subscribeSymbol})
+	if err := ctl.FeedSvc.RefreshFromDatabase(context.Background()); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "global instrument created but feed sync failed",
+			"error":       "global instrument created but feed sync failed",
+		})
 	}
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"status_code":       fiber.StatusCreated,
@@ -171,17 +172,12 @@ func (ctl *AdminGlobalInstrumentController) Update(c *fiber.Ctx) error {
 			"error":       "failed to update global instrument",
 		})
 	}
-	subscribeSymbol := strings.TrimSpace(instrument.SubscribeSymbolName)
-	if subscribeSymbol == "" {
-		subscribeSymbol = strings.TrimSpace(instrument.Symbol)
-	}
-	// Subscribe/unsubscribe only if not deleted
-	if instrument.IsDeleted {
-		ctl.FeedSvc.Unsubscribe([]string{subscribeSymbol})
-	} else if instrument.IsActive() {
-		ctl.FeedSvc.Subscribe([]string{subscribeSymbol})
-	} else {
-		ctl.FeedSvc.Unsubscribe([]string{subscribeSymbol})
+	if err := ctl.FeedSvc.RefreshFromDatabase(context.Background()); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "global instrument updated but feed sync failed",
+			"error":       "global instrument updated but feed sync failed",
+		})
 	}
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status_code":       fiber.StatusOK,

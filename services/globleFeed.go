@@ -20,6 +20,7 @@ import (
 type MarketFeedProvider interface {
 	Subscribe(symbols []string) error
 	Unsubscribe(symbols []string) error
+	RefreshFromDatabase(ctx context.Context) error
 }
 
 type GlobalMarketFeedService struct {
@@ -35,6 +36,8 @@ type GlobalMarketFeedService struct {
 	redisCache *RedisTickCache
 	metaMu     sync.RWMutex
 	metaBySym  map[string]globalInstrumentMeta
+	subsMu     sync.RWMutex
+	subscribed map[string]struct{}
 
 	marketState       *MarketStateManager
 	lastInboundTickAt atomic.Int64
@@ -80,6 +83,7 @@ func NewGlobalMarketFeedService(db *gorm.DB, redisCache *RedisTickCache) *Global
 		marketState: NewMarketStateManager(),
 		redisCache:  redisCache,
 		metaBySym:   make(map[string]globalInstrumentMeta),
+		subscribed:  make(map[string]struct{}),
 	}
 	if redisCache != nil {
 		ticks := redisCache.Snapshot(context.Background(), GlobalTickPrefix, "")
@@ -115,6 +119,7 @@ func (g *GlobalMarketFeedService) Start(ctx context.Context, tickHub *TickHub) {
 		return
 	}
 	g.conn = conn
+	g.syncActiveSymbolsToRedis(ctx)
 
 	symbols := g.subscriptionSymbols()
 
@@ -264,6 +269,8 @@ func (g *GlobalMarketFeedService) reconnect() error {
 		return fmt.Errorf("dial failed: %w", err)
 	}
 	g.conn = conn
+	g.clearSubscribed()
+	g.syncActiveSymbolsToRedis(context.Background())
 
 	// Re-load metadata and rebuild symbol list.
 	symbols := g.subscriptionSymbols()
@@ -371,18 +378,98 @@ func (g *GlobalMarketFeedService) subscriptionSymbols() []string {
 		}
 	}
 
-	if g.redisCache != nil {
-		cached := g.redisCache.Snapshot(context.Background(), GlobalTickPrefix, "")
-		for _, tick := range cached {
-			merged = append(merged, tick.Symbol)
-		}
-	}
-
 	symbols := uniqueSymbols(merged)
 	if len(symbols) > 0 {
 		log.Printf("global market feed: prepared %d subscription symbols", len(symbols))
+	} else {
+		log.Printf("global market feed: no active DB symbols available")
 	}
 	return symbols
+}
+
+func (g *GlobalMarketFeedService) syncActiveSymbolsToRedis(ctx context.Context) {
+	if g.db == nil || g.redisCache == nil {
+		return
+	}
+	active, err := models.GetActiveGlobalInstrumentSymbols(g.db)
+	if err != nil {
+		log.Printf("global market feed: failed to sync active symbols to redis: %v", err)
+		return
+	}
+	norm := uniqueSymbols(active)
+	g.redisCache.SetSymbolList(ctx, GlobalSymbolListKey, norm)
+	log.Printf("global market feed: synced %d active symbols to redis", len(norm))
+}
+
+func (g *GlobalMarketFeedService) snapshotSubscribed() []string {
+	g.subsMu.RLock()
+	defer g.subsMu.RUnlock()
+	result := make([]string, 0, len(g.subscribed))
+	for s := range g.subscribed {
+		result = append(result, s)
+	}
+	return result
+}
+
+func (g *GlobalMarketFeedService) clearSubscribed() {
+	g.subsMu.Lock()
+	g.subscribed = make(map[string]struct{})
+	g.subsMu.Unlock()
+}
+
+func (g *GlobalMarketFeedService) RefreshFromDatabase(ctx context.Context) error {
+	if g.db == nil {
+		return nil
+	}
+	g.loadInstrumentMeta()
+
+	active, err := models.GetActiveGlobalInstrumentSymbols(g.db)
+	if err != nil {
+		return fmt.Errorf("load active symbols failed: %w", err)
+	}
+	desired := uniqueSymbols(active)
+
+	if g.redisCache != nil {
+		g.redisCache.SetSymbolList(ctx, GlobalSymbolListKey, desired)
+	}
+
+	current := uniqueSymbols(g.snapshotSubscribed())
+	curSet := make(map[string]struct{}, len(current))
+	for _, s := range current {
+		curSet[s] = struct{}{}
+	}
+	newSet := make(map[string]struct{}, len(desired))
+	for _, s := range desired {
+		newSet[s] = struct{}{}
+	}
+
+	toUnsub := make([]string, 0)
+	for s := range curSet {
+		if _, ok := newSet[s]; !ok {
+			toUnsub = append(toUnsub, s)
+		}
+	}
+
+	toSub := make([]string, 0)
+	for s := range newSet {
+		if _, ok := curSet[s]; !ok {
+			toSub = append(toSub, s)
+		}
+	}
+
+	if len(toUnsub) > 0 {
+		if err := g.Unsubscribe(toUnsub); err != nil {
+			return fmt.Errorf("unsubscribe failed: %w", err)
+		}
+	}
+	if len(toSub) > 0 {
+		if err := g.Subscribe(toSub); err != nil {
+			return fmt.Errorf("subscribe failed: %w", err)
+		}
+	}
+
+	log.Printf("global market feed: refreshed from DB (active=%d, subscribed=%d)", len(desired), len(newSet))
+	return nil
 }
 
 func (g *GlobalMarketFeedService) loadInstrumentMeta() {
@@ -446,7 +533,15 @@ func (g *GlobalMarketFeedService) Subscribe(symbols []string) error {
 	}
 	g.writeMu.Lock()
 	defer g.writeMu.Unlock()
-	return g.conn.WriteJSON(msg)
+	if err := g.conn.WriteJSON(msg); err != nil {
+		return err
+	}
+	g.subsMu.Lock()
+	for _, s := range symbols {
+		g.subscribed[s] = struct{}{}
+	}
+	g.subsMu.Unlock()
+	return nil
 }
 
 func (g *GlobalMarketFeedService) Unsubscribe(symbols []string) error {
@@ -463,7 +558,15 @@ func (g *GlobalMarketFeedService) Unsubscribe(symbols []string) error {
 	}
 	g.writeMu.Lock()
 	defer g.writeMu.Unlock()
-	return g.conn.WriteJSON(msg)
+	if err := g.conn.WriteJSON(msg); err != nil {
+		return err
+	}
+	g.subsMu.Lock()
+	for _, s := range symbols {
+		delete(g.subscribed, s)
+	}
+	g.subsMu.Unlock()
+	return nil
 }
 
 func (g *GlobalMarketFeedService) Stop() {

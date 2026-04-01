@@ -13,8 +13,9 @@ import (
 const tickCacheTTL = 24 * time.Hour
 
 const (
-	ZerodhaTickPrefix = "feed:zerodha:tick:"
-	GlobalTickPrefix  = "feed:global:tick:"
+	ZerodhaTickPrefix   = "feed:zerodha:tick:"
+	GlobalTickPrefix    = "feed:global:tick:"
+	GlobalSymbolListKey = "feed:global:symbols"
 )
 
 // RedisTickCache caches NormalizedTick values in Redis per symbol.
@@ -83,4 +84,53 @@ func (c *RedisTickCache) Snapshot(ctx context.Context, prefix, filterSym string)
 		ticks = append(ticks, tick)
 	}
 	return ticks
+}
+
+// SetSymbolList stores normalized symbols as a JSON array under key.
+func (c *RedisTickCache) SetSymbolList(ctx context.Context, key string, symbols []string) {
+	if c == nil || c.client == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	norm := make([]string, 0, len(symbols))
+	seen := make(map[string]struct{}, len(symbols))
+	for _, s := range symbols {
+		v := strings.ToUpper(strings.TrimSpace(s))
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		norm = append(norm, v)
+	}
+	if len(norm) == 0 {
+		if err := c.client.Del(ctx, key).Err(); err != nil {
+			log.Printf("redis symbol list delete error: key=%s err=%v", key, err)
+		}
+		return
+	}
+	data, err := json.Marshal(norm)
+	if err != nil {
+		return
+	}
+	if err := c.client.Set(ctx, key, data, tickCacheTTL).Err(); err != nil {
+		log.Printf("redis symbol list set error: key=%s err=%v", key, err)
+	}
+}
+
+// GetSymbolList returns symbols stored by SetSymbolList.
+func (c *RedisTickCache) GetSymbolList(ctx context.Context, key string) []string {
+	if c == nil || c.client == nil || strings.TrimSpace(key) == "" {
+		return nil
+	}
+	value, err := c.client.Get(ctx, key).Result()
+	if err != nil {
+		return nil
+	}
+	var symbols []string
+	if err := json.Unmarshal([]byte(value), &symbols); err != nil {
+		return nil
+	}
+	return symbols
 }
