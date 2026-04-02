@@ -28,6 +28,16 @@ BEGIN
 	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'instrument_status') THEN
 		CREATE TYPE instrument_status AS ENUM ('ACTIVE', 'INACTIVE');
 	END IF;
+
+	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'instrument_segment') THEN
+		CREATE TYPE instrument_segment AS ENUM ('MCX-FUT', 'NFO-FUT', 'NFO-OPT', 'CDS-FUT');
+	END IF;
+	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'CDS-FUT';
+
+	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'instrument_exchange') THEN
+		CREATE TYPE instrument_exchange AS ENUM ('CEPE', 'MCX', 'MCX-MINI', 'NSE', 'CDS');
+	END IF;
+	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'CDS';
 END
 $$;`
 
@@ -131,7 +141,107 @@ BEGIN
 END
 $$;`
 
-	return db.Exec(convertInstrumentStatusSQL).Error
+	if err := db.Exec(convertInstrumentStatusSQL).Error; err != nil {
+		return err
+	}
+
+	convertInstrumentSegmentSQL := `
+DO $$
+DECLARE
+	segment_udt text;
+BEGIN
+	IF EXISTS (
+		SELECT 1
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'instruments'
+		  AND column_name = 'segment'
+	) THEN
+		SELECT udt_name
+		INTO segment_udt
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'instruments'
+		  AND column_name = 'segment'
+		LIMIT 1;
+
+		IF segment_udt = 'instrument_segment' THEN
+			UPDATE instruments
+			SET segment = 'NFO-FUT'::instrument_segment
+			WHERE segment IS NULL OR UPPER(TRIM(segment::text)) NOT IN ('MCX-FUT', 'NFO-FUT', 'NFO-OPT', 'CDS-FUT');
+		ELSE
+			UPDATE instruments
+			SET segment = 'NFO-FUT'
+			WHERE segment IS NULL OR UPPER(TRIM(segment::text)) NOT IN ('MCX-FUT', 'NFO-FUT', 'NFO-OPT', 'CDS-FUT');
+
+			ALTER TABLE instruments
+				ALTER COLUMN segment DROP DEFAULT;
+
+			ALTER TABLE instruments
+				ALTER COLUMN segment TYPE instrument_segment
+				USING UPPER(TRIM(segment::text))::instrument_segment;
+		END IF;
+
+		ALTER TABLE instruments
+			ALTER COLUMN segment SET DEFAULT 'NFO-FUT';
+
+		ALTER TABLE instruments
+			ALTER COLUMN segment SET NOT NULL;
+	END IF;
+END
+$$;`
+
+	if err := db.Exec(convertInstrumentSegmentSQL).Error; err != nil {
+		return err
+	}
+
+	convertInstrumentExchangeSQL := `
+DO $$
+DECLARE
+	exchange_udt text;
+BEGIN
+	IF EXISTS (
+		SELECT 1
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'instruments'
+		  AND column_name = 'exchange'
+	) THEN
+		SELECT udt_name
+		INTO exchange_udt
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'instruments'
+		  AND column_name = 'exchange'
+		LIMIT 1;
+
+		IF exchange_udt = 'instrument_exchange' THEN
+			UPDATE instruments
+			SET exchange = 'NSE'::instrument_exchange
+			WHERE exchange IS NULL OR UPPER(TRIM(exchange::text)) NOT IN ('CEPE', 'MCX', 'MCX-MINI', 'NSE', 'CDS');
+		ELSE
+			UPDATE instruments
+			SET exchange = 'NSE'
+			WHERE exchange IS NULL OR UPPER(TRIM(exchange::text)) NOT IN ('CEPE', 'MCX', 'MCX-MINI', 'NSE', 'CDS');
+
+			ALTER TABLE instruments
+				ALTER COLUMN exchange DROP DEFAULT;
+
+			ALTER TABLE instruments
+				ALTER COLUMN exchange TYPE instrument_exchange
+				USING UPPER(TRIM(exchange::text))::instrument_exchange;
+		END IF;
+
+		ALTER TABLE instruments
+			ALTER COLUMN exchange SET DEFAULT 'NSE';
+
+		ALTER TABLE instruments
+			ALTER COLUMN exchange SET NOT NULL;
+	END IF;
+END
+$$;`
+
+	return db.Exec(convertInstrumentExchangeSQL).Error
 }
 
 func ConnectDatabase() {

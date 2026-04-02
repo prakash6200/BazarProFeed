@@ -73,18 +73,18 @@ var allowedInstrumentTypes = map[string]struct{}{
 }
 
 var allowedSegments = map[string]struct{}{
-	"INDICES": {},
+	"CDS-FUT": {},
 	"MCX-FUT": {},
-	"MCX-OPT": {},
-	"NCO-FUT": {},
 	"NFO-FUT": {},
 	"NFO-OPT": {},
 }
 
 var allowedExchanges = map[string]struct{}{
-	"MCX": {},
-	"NCO": {},
-	"NFO": {},
+	"CDS":      {},
+	"CEPE":     {},
+	"MCX":      {},
+	"MCX-MINI": {},
+	"NSE":      {},
 }
 
 func isAllowedEnumValue(value string, allowed map[string]struct{}) bool {
@@ -114,9 +114,9 @@ func ValidateCreateInstrument(c *fiber.Ctx) error {
 	req.TradingSymbol = strings.TrimSpace(req.TradingSymbol)
 	req.Name = strings.TrimSpace(req.Name)
 	req.Expiry = strings.TrimSpace(req.Expiry)
-	req.InstrumentType = strings.TrimSpace(req.InstrumentType)
-	req.Segment = strings.TrimSpace(req.Segment)
-	req.Exchange = strings.TrimSpace(req.Exchange)
+	req.InstrumentType = strings.ToUpper(strings.TrimSpace(req.InstrumentType))
+	req.Segment = strings.ToUpper(strings.TrimSpace(req.Segment))
+	req.Exchange = strings.ToUpper(strings.TrimSpace(req.Exchange))
 	req.Status = strings.TrimSpace(req.Status)
 
 	if req.InstrumentToken <= 0 {
@@ -155,6 +155,22 @@ func ValidateCreateInstrument(c *fiber.Ctx) error {
 		req.Status = status
 	}
 
+	if req.Segment == "" || !isAllowedEnumValue(req.Segment, allowedSegments) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "segment must be one of: " + allowedEnumValues(allowedSegments),
+			"error":       "segment must be one of: " + allowedEnumValues(allowedSegments),
+		})
+	}
+
+	if req.Exchange == "" || !isAllowedEnumValue(req.Exchange, allowedExchanges) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "exchange must be one of: " + allowedEnumValues(allowedExchanges),
+			"error":       "exchange must be one of: " + allowedEnumValues(allowedExchanges),
+		})
+	}
+
 	c.Locals("validated_request", req)
 	return c.Next()
 }
@@ -190,12 +206,26 @@ func ValidateUpdateInstrument(c *fiber.Ctx) error {
 	}
 
 	if req.Segment != nil {
-		trimmed := strings.TrimSpace(*req.Segment)
+		trimmed := strings.ToUpper(strings.TrimSpace(*req.Segment))
+		if trimmed == "" || !isAllowedEnumValue(trimmed, allowedSegments) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "segment must be one of: " + allowedEnumValues(allowedSegments),
+				"error":       "segment must be one of: " + allowedEnumValues(allowedSegments),
+			})
+		}
 		req.Segment = &trimmed
 	}
 
 	if req.Exchange != nil {
-		trimmed := strings.TrimSpace(*req.Exchange)
+		trimmed := strings.ToUpper(strings.TrimSpace(*req.Exchange))
+		if trimmed == "" || !isAllowedEnumValue(trimmed, allowedExchanges) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "exchange must be one of: " + allowedEnumValues(allowedExchanges),
+				"error":       "exchange must be one of: " + allowedEnumValues(allowedExchanges),
+			})
+		}
 		req.Exchange = &trimmed
 	}
 

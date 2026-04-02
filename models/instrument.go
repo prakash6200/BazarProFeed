@@ -27,8 +27,8 @@ type Instrument struct {
 	TickSize        float64    `json:"tick_size"`
 	LotSize         int        `json:"lot_size"`
 	InstrumentType  string     `json:"instrument_type"`
-	Segment         string     `json:"segment"`
-	Exchange        string     `json:"exchange"`
+	Segment         string     `gorm:"type:instrument_segment;not null;default:'NFO-FUT';index" json:"segment"`
+	Exchange        string     `gorm:"type:instrument_exchange;not null;default:'NSE';index" json:"exchange"`
 	Status          string     `gorm:"type:instrument_status;not null;default:'ACTIVE';index" json:"status"`
 	IsDeleted       bool       `gorm:"not null;default:false;index" json:"is_deleted"`
 	CreatedAt       time.Time  `json:"created_at"`
@@ -38,7 +38,33 @@ type Instrument struct {
 const (
 	InstrumentStatusActive   = "ACTIVE"
 	InstrumentStatusInactive = "INACTIVE"
+
+	InstrumentSegmentMCXFut = "MCX-FUT"
+	InstrumentSegmentNFOFut = "NFO-FUT"
+	InstrumentSegmentNFOOpt = "NFO-OPT"
+	InstrumentSegmentCDSFut = "CDS-FUT"
+
+	InstrumentExchangeNSE     = "NSE"
+	InstrumentExchangeMCX     = "MCX"
+	InstrumentExchangeMCXMini = "MCX-MINI"
+	InstrumentExchangeCEPE    = "CEPE"
+	InstrumentExchangeCDS     = "CDS"
 )
+
+var allowedInstrumentSegments = map[string]struct{}{
+	InstrumentSegmentMCXFut: {},
+	InstrumentSegmentNFOFut: {},
+	InstrumentSegmentNFOOpt: {},
+	InstrumentSegmentCDSFut: {},
+}
+
+var allowedInstrumentExchanges = map[string]struct{}{
+	InstrumentExchangeNSE:     {},
+	InstrumentExchangeMCX:     {},
+	InstrumentExchangeMCXMini: {},
+	InstrumentExchangeCEPE:    {},
+	InstrumentExchangeCDS:     {},
+}
 
 func NormalizeInstrumentStatus(status string) string {
 	trimmed := strings.ToUpper(strings.TrimSpace(status))
@@ -46,6 +72,32 @@ func NormalizeInstrumentStatus(status string) string {
 		return InstrumentStatusInactive
 	}
 	return InstrumentStatusActive
+}
+
+func NormalizeInstrumentSegment(segment string) string {
+	trimmed := strings.ToUpper(strings.TrimSpace(segment))
+	if _, ok := allowedInstrumentSegments[trimmed]; ok {
+		return trimmed
+	}
+	return InstrumentSegmentNFOFut
+}
+
+func NormalizeInstrumentExchange(exchange string) string {
+	trimmed := strings.ToUpper(strings.TrimSpace(exchange))
+	if _, ok := allowedInstrumentExchanges[trimmed]; ok {
+		return trimmed
+	}
+	return InstrumentExchangeNSE
+}
+
+func IsAllowedInstrumentSegment(segment string) bool {
+	_, ok := allowedInstrumentSegments[strings.ToUpper(strings.TrimSpace(segment))]
+	return ok
+}
+
+func IsAllowedInstrumentExchange(exchange string) bool {
+	_, ok := allowedInstrumentExchanges[strings.ToUpper(strings.TrimSpace(exchange))]
+	return ok
 }
 
 func (i *Instrument) IsActive() bool {
@@ -184,6 +236,18 @@ func parseInstrumentCSVRecord(record []string) (*Instrument, error) {
 		return nil, err
 	}
 
+	rawSegment := strings.TrimSpace(record[10])
+	rawExchange := strings.TrimSpace(record[11])
+	if !IsAllowedInstrumentSegment(rawSegment) {
+		return nil, fmt.Errorf("invalid segment: %s", strings.TrimSpace(record[10]))
+	}
+	if !IsAllowedInstrumentExchange(rawExchange) {
+		return nil, fmt.Errorf("invalid exchange: %s", strings.TrimSpace(record[11]))
+	}
+
+	segment := NormalizeInstrumentSegment(rawSegment)
+	exchange := NormalizeInstrumentExchange(rawExchange)
+
 	return &Instrument{
 		InstrumentToken: instrumentToken,
 		ExchangeToken:   exchangeToken,
@@ -195,8 +259,8 @@ func parseInstrumentCSVRecord(record []string) (*Instrument, error) {
 		TickSize:        tickSize,
 		LotSize:         lotSize,
 		InstrumentType:  strings.TrimSpace(record[9]),
-		Segment:         strings.TrimSpace(record[10]),
-		Exchange:        strings.TrimSpace(record[11]),
+		Segment:         segment,
+		Exchange:        exchange,
 		Status:          InstrumentStatusActive,
 		IsDeleted:       false,
 	}, nil
@@ -341,6 +405,8 @@ func ImportInstrumentsFromCSV(db *gorm.DB, csvPath string) (*CSVImportResult, er
 
 func CreateInstrument(db *gorm.DB, instrument *Instrument) error {
 	instrument.Status = NormalizeInstrumentStatus(instrument.Status)
+	instrument.Segment = NormalizeInstrumentSegment(instrument.Segment)
+	instrument.Exchange = NormalizeInstrumentExchange(instrument.Exchange)
 	instrument.IsDeleted = false
 	return db.Create(instrument).Error
 }
@@ -406,6 +472,18 @@ func GetInstrumentsPaginated(db *gorm.DB, page, limit int, includeDeleted bool, 
 }
 
 func UpdateInstrumentFields(db *gorm.DB, id string, updates map[string]interface{}) error {
+	if rawSegment, ok := updates["segment"]; ok {
+		if value, ok := rawSegment.(string); ok {
+			updates["segment"] = NormalizeInstrumentSegment(value)
+		}
+	}
+
+	if rawExchange, ok := updates["exchange"]; ok {
+		if value, ok := rawExchange.(string); ok {
+			updates["exchange"] = NormalizeInstrumentExchange(value)
+		}
+	}
+
 	return db.Model(&Instrument{}).Where("id = ? AND is_deleted = ?", id, false).Updates(updates).Error
 }
 
