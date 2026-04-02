@@ -446,11 +446,11 @@ func GetInstrumentsPaginated(db *gorm.DB, page, limit int, includeDeleted bool, 
 	}
 
 	if strings.TrimSpace(filters.Segment) != "" {
-		query = query.Where("UPPER(segment) = ?", strings.ToUpper(strings.TrimSpace(filters.Segment)))
+		query = query.Where("segment = ?", NormalizeInstrumentSegment(filters.Segment))
 	}
 
 	if strings.TrimSpace(filters.Exchange) != "" {
-		query = query.Where("UPPER(exchange) = ?", strings.ToUpper(strings.TrimSpace(filters.Exchange)))
+		query = query.Where("exchange = ?", NormalizeInstrumentExchange(filters.Exchange))
 	}
 
 	if strings.TrimSpace(filters.Status) != "" {

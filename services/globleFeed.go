@@ -216,7 +216,10 @@ func (g *GlobalMarketFeedService) readLoop(tickHub *TickHub) {
 			MarketStatus:     MarketStatusOpen,
 		}
 		if tick.Symbol == "" {
-			log.Printf("global market feed: symbol empty, raw keys: %v", getMapKeys(raw))
+			// Ignore non-tick control frames (subscribe ack, heartbeat) that don't carry symbol fields.
+			if _, hasEvent := raw["event"]; !hasEvent {
+				log.Printf("global market feed: symbol empty, raw keys: %v", getMapKeys(raw))
+			}
 			continue
 		}
 		updated := g.marketState.Update(tick)
