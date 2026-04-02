@@ -29,6 +29,29 @@ BEGIN
 		CREATE TYPE instrument_status AS ENUM ('ACTIVE', 'INACTIVE');
 	END IF;
 
+	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'instrument_segment') THEN
+		CREATE TYPE instrument_segment AS ENUM ('INDICES', 'CDS-FUT', 'CDS-OPT', 'MCX-FUT', 'MCX-OPT', 'NCO-FUT', 'NFO-FUT', 'NFO-OPT');
+	END IF;
+	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'INDICES';
+	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'CDS-FUT';
+	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'CDS-OPT';
+	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'MCX-FUT';
+	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'MCX-OPT';
+	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'NCO-FUT';
+	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'NFO-FUT';
+	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'NFO-OPT';
+
+	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'instrument_exchange') THEN
+		CREATE TYPE instrument_exchange AS ENUM ('CDS', 'CEPE', 'MCX', 'MCX-MINI', 'NCO', 'NFO', 'NSE');
+	END IF;
+	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'CDS';
+	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'CEPE';
+	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'MCX';
+	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'MCX-MINI';
+	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'NCO';
+	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'NFO';
+	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'NSE';
+
 	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'global_market_segment') THEN
 		CREATE TYPE global_market_segment AS ENUM ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
 	END IF;
@@ -140,6 +163,106 @@ END
 $$;`
 
 	if err := db.Exec(convertInstrumentStatusSQL).Error; err != nil {
+		return err
+	}
+
+	convertInstrumentSegmentSQL := `
+DO $$
+DECLARE
+	segment_udt text;
+BEGIN
+	IF EXISTS (
+		SELECT 1
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'instruments'
+		  AND column_name = 'segment'
+	) THEN
+		SELECT udt_name
+		INTO segment_udt
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'instruments'
+		  AND column_name = 'segment'
+		LIMIT 1;
+
+		IF segment_udt = 'instrument_segment' THEN
+			UPDATE instruments
+			SET segment = 'NFO-FUT'::instrument_segment
+			WHERE segment IS NULL OR UPPER(TRIM(segment::text)) NOT IN ('INDICES', 'CDS-FUT', 'CDS-OPT', 'MCX-FUT', 'MCX-OPT', 'NCO-FUT', 'NFO-FUT', 'NFO-OPT');
+		ELSE
+			UPDATE instruments
+			SET segment = 'NFO-FUT'
+			WHERE segment IS NULL OR UPPER(TRIM(segment::text)) NOT IN ('INDICES', 'CDS-FUT', 'CDS-OPT', 'MCX-FUT', 'MCX-OPT', 'NCO-FUT', 'NFO-FUT', 'NFO-OPT');
+
+			ALTER TABLE instruments
+				ALTER COLUMN segment DROP DEFAULT;
+
+			ALTER TABLE instruments
+				ALTER COLUMN segment TYPE instrument_segment
+				USING UPPER(TRIM(segment::text))::instrument_segment;
+		END IF;
+
+		ALTER TABLE instruments
+			ALTER COLUMN segment SET DEFAULT 'NFO-FUT';
+
+		ALTER TABLE instruments
+			ALTER COLUMN segment SET NOT NULL;
+	END IF;
+END
+$$;`
+
+	if err := db.Exec(convertInstrumentSegmentSQL).Error; err != nil {
+		return err
+	}
+
+	convertInstrumentExchangeSQL := `
+DO $$
+DECLARE
+	exchange_udt text;
+BEGIN
+	IF EXISTS (
+		SELECT 1
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'instruments'
+		  AND column_name = 'exchange'
+	) THEN
+		SELECT udt_name
+		INTO exchange_udt
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'instruments'
+		  AND column_name = 'exchange'
+		LIMIT 1;
+
+		IF exchange_udt = 'instrument_exchange' THEN
+			UPDATE instruments
+			SET exchange = 'NFO'::instrument_exchange
+			WHERE exchange IS NULL OR UPPER(TRIM(exchange::text)) NOT IN ('CDS', 'CEPE', 'MCX', 'MCX-MINI', 'NCO', 'NFO', 'NSE');
+		ELSE
+			UPDATE instruments
+			SET exchange = 'NFO'
+			WHERE exchange IS NULL OR UPPER(TRIM(exchange::text)) NOT IN ('CDS', 'CEPE', 'MCX', 'MCX-MINI', 'NCO', 'NFO', 'NSE');
+
+			ALTER TABLE instruments
+				ALTER COLUMN exchange DROP DEFAULT;
+
+			ALTER TABLE instruments
+				ALTER COLUMN exchange TYPE instrument_exchange
+				USING UPPER(TRIM(exchange::text))::instrument_exchange;
+		END IF;
+
+		ALTER TABLE instruments
+			ALTER COLUMN exchange SET DEFAULT 'NFO';
+
+		ALTER TABLE instruments
+			ALTER COLUMN exchange SET NOT NULL;
+	END IF;
+END
+$$;`
+
+	if err := db.Exec(convertInstrumentExchangeSQL).Error; err != nil {
 		return err
 	}
 
