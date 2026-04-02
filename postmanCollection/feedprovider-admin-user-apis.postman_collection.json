@@ -208,7 +208,7 @@
                 { "key": "expiry", "value": "2026-05-26" }
               ]
             },
-            "description": "Paginated list of global instruments.\nDefault request can use only page and limit.\nSupported optional query params:\n- include_deleted\n- status: ACTIVE or INACTIVE\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- instrument_type\n- expiry: YYYY-MM-DD, DD-MM-YYYY, DD-MM-YY, or RFC3339\n- search: matches symbol, subscribe_symbol_name, tradingsymbol, or name\n\nResponse shape matches admin instruments list with status_code, message, instruments, and pagination."
+            "description": "Paginated list of global instruments.\nQuery params:\n- page: positive integer (default 1)\n- limit: positive integer, max 100 (default 20)\n- include_deleted: true or false (default false)\n- status: ACTIVE, INACTIVE\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- instrument_type: free text (usually SPOT/FUT/OPT)\n- expiry: YYYY-MM-DD, DD-MM-YYYY, DD-MM-YY, or RFC3339\n- search: partial match on symbol, subscribe_symbol_name, tradingsymbol, name\n\nResponse includes status_code, message, instruments, pagination."
           }
         },
         {
@@ -263,7 +263,7 @@
               "host": ["{{base_url}}"],
               "path": ["admin", "global-instruments"]
             },
-            "description": "Create a new global instrument.\nBody fields:\n- symbol: required (auto-derived from subscribe_symbol_name or tradingsymbol if empty)\n- instrument_token, exchange_token, tradingsymbol, subscribe_symbol_name\n- last_price, expiry, tick_size, lot_size, instrument_type, strike\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- status: ACTIVE or INACTIVE"
+            "description": "Create a new global instrument.\nBody params:\n- instrument_token: int64\n- exchange_token: int64\n- tradingsymbol: string\n- name: string\n- subscribe_symbol_name: string\n- symbol: optional, auto-derived from subscribe_symbol_name then tradingsymbol\n- last_price: number\n- expiry: null or date\n- tick_size: number\n- lot_size: integer\n- instrument_type: free text (usually SPOT/FUT/OPT)\n- strike: number\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- status: ACTIVE, INACTIVE"
           }
         },
         {
@@ -283,7 +283,7 @@
               "host": ["{{base_url}}"],
               "path": ["admin", "global-instruments", "{{global_instrument_id}}"]
             },
-            "description": "Update, soft delete, or undelete a global instrument by ID.\nSupports full global instrument model fields including token/symbol metadata and enums.\nSet is_deleted=true for soft delete, false for undelete."
+            "description": "Update, soft delete, or undelete global instrument by ID.\nAccepted fields are same as Create Global Instrument body.\nEnum values:\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- status: ACTIVE, INACTIVE\nSoft delete controls:\n- is_deleted: true (delete), false (undelete)"
           }
         },
         {
@@ -587,7 +587,7 @@
                 }
               ]
             },
-            "description": "Admin-only paginated instrument list with filters.\nQuery:\n- page: positive int\n- limit: positive int, max 100\n- include_deleted: true/false\n- instrument_type enum: CE, EQ, FUT, PE\n- segment enum: INDICES, CDS-FUT, CDS-OPT, MCX-FUT, MCX-OPT, NCO-FUT, NFO-FUT, NFO-OPT\n- exchange enum: CDS, MCX, NCO, NFO\n- status enum: ACTIVE, INACTIVE\n- expiry: dd-mm-yy\n- search: token/symbol/name partial match"
+            "description": "Admin-only paginated instrument list with filters.\nQuery params:\n- page: positive integer (default 1)\n- limit: positive integer, max 100 (default 20)\n- include_deleted: true/false (default false)\n- instrument_type: CE, EQ, FUT, PE\n- segment: INDICES, CDS-FUT, CDS-OPT, MCX-FUT, MCX-OPT, NCO-FUT, NFO-FUT, NFO-OPT\n- exchange: CDS, MCX, NCO, NFO\n- status: ACTIVE, INACTIVE\n- expiry: dd-mm-yy\n- search: token/tradingsymbol/name partial match"
           },
           "response": []
         },
@@ -644,7 +644,7 @@
                 "instruments"
               ]
             },
-            "description": "Admin-only. Create new instrument.\nstatus allowed: ACTIVE or INACTIVE\nexpiry format: dd-mm-yy or empty"
+            "description": "Admin-only. Create Zerodha instrument.\nBody enum values:\n- instrument_type: CE, EQ, FUT, PE\n- segment: INDICES, CDS-FUT, CDS-OPT, MCX-FUT, MCX-OPT, NCO-FUT, NFO-FUT, NFO-OPT\n- exchange: CDS, MCX, NCO, NFO\n- status: ACTIVE, INACTIVE\nExpiry format: dd-mm-yy or empty string."
           },
           "response": []
         },
@@ -677,7 +677,7 @@
                 "{{instrument_id}}"
               ]
             },
-            "description": "Admin-only. Update instrument fields by UUID instrument_id.\nAt least one field required in body."
+            "description": "Admin-only. Update Zerodha instrument by UUID instrument_id.\nAt least one field required in body.\nAllowed enum values when provided:\n- instrument_type: CE, EQ, FUT, PE\n- segment: INDICES, CDS-FUT, CDS-OPT, MCX-FUT, MCX-OPT, NCO-FUT, NFO-FUT, NFO-OPT\n- exchange: CDS, MCX, NCO, NFO\n- status: ACTIVE, INACTIVE"
           },
           "response": []
         },
