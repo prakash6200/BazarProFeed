@@ -106,11 +106,11 @@ func ValidateListGlobalInstrumentsQuery(c *fiber.Ctx) error {
 				"error":       "limit must be a positive integer",
 			})
 		}
-		if parsed > 100 {
+		if parsed > 5000 {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"status_code": fiber.StatusBadRequest,
-				"message":     "limit must be less than or equal to 100",
-				"error":       "limit must be less than or equal to 100",
+				"message":     "limit must be less than or equal to 5000",
+				"error":       "limit must be less than or equal to 5000",
 			})
 		}
 		limit = parsed
