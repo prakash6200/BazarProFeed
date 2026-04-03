@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
@@ -21,8 +22,41 @@ type AdminGlobalInstrumentController struct {
 	FeedSvc services.MarketFeedProvider
 }
 
+type globalInstrumentUpsertRequest struct {
+	InstrumentToken     int64   `json:"instrument_token"`
+	ExchangeToken       int64   `json:"exchange_token"`
+	TradingSymbol       string  `json:"tradingsymbol"`
+	Name                string  `json:"name"`
+	SubscribeSymbolName string  `json:"subscribe_symbol_name"`
+	Symbol              string  `json:"symbol"`
+	LastPrice           float64 `json:"last_price"`
+	Expiry              string  `json:"expiry"`
+	TickSize            float64 `json:"tick_size"`
+	LotSize             int     `json:"lot_size"`
+	InstrumentType      string  `json:"instrument_type"`
+	Segment             string  `json:"segment"`
+	Exchange            string  `json:"exchange"`
+	Strike              float64 `json:"strike"`
+	Status              string  `json:"status"`
+	IsDeleted           bool    `json:"is_deleted"`
+}
+
 func NewAdminGlobalInstrumentController(db *gorm.DB, feedSvc services.MarketFeedProvider) *AdminGlobalInstrumentController {
 	return &AdminGlobalInstrumentController{DB: db, FeedSvc: feedSvc}
+}
+
+func parseGlobalInstrumentExpiry(value string) (*time.Time, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	parsed, err := time.Parse("02-01-06", trimmed)
+	if err != nil {
+		return nil, err
+	}
+
+	return &parsed, nil
 }
 
 func (ctl *AdminGlobalInstrumentController) refreshFeed() error {
@@ -170,7 +204,7 @@ func (ctl *AdminGlobalInstrumentController) Import(c *fiber.Ctx) error {
 
 // Create
 func (ctl *AdminGlobalInstrumentController) Create(c *fiber.Ctx) error {
-	var req models.GlobalInstrument
+	var req globalInstrumentUpsertRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
@@ -178,14 +212,43 @@ func (ctl *AdminGlobalInstrumentController) Create(c *fiber.Ctx) error {
 			"error":       "invalid request payload",
 		})
 	}
-	if err := validator.ValidateGlobalInstrument(&req); err != nil {
+
+	expiry, err := parseGlobalInstrumentExpiry(req.Expiry)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "expiry must be in dd-mm-yy format",
+			"error":       "expiry must be in dd-mm-yy format",
+		})
+	}
+
+	instrument := models.GlobalInstrument{
+		InstrumentToken:     req.InstrumentToken,
+		ExchangeToken:       req.ExchangeToken,
+		TradingSymbol:       req.TradingSymbol,
+		Name:                req.Name,
+		SubscribeSymbolName: req.SubscribeSymbolName,
+		Symbol:              req.Symbol,
+		LastPrice:           req.LastPrice,
+		Expiry:              expiry,
+		TickSize:            req.TickSize,
+		LotSize:             req.LotSize,
+		InstrumentType:      req.InstrumentType,
+		Segment:             req.Segment,
+		Exchange:            req.Exchange,
+		Strike:              req.Strike,
+		Status:              req.Status,
+		IsDeleted:           req.IsDeleted,
+	}
+
+	if err := validator.ValidateGlobalInstrument(&instrument); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
 			"message":     err.Error(),
 			"error":       err.Error(),
 		})
 	}
-	if err := ctl.DB.Create(&req).Error; err != nil {
+	if err := ctl.DB.Create(&instrument).Error; err != nil {
 		statusCode := fiber.StatusInternalServerError
 		message := "failed to create global instrument"
 		if errors.Is(err, gorm.ErrDuplicatedKey) || strings.Contains(strings.ToLower(err.Error()), "duplicate") {
@@ -208,14 +271,14 @@ func (ctl *AdminGlobalInstrumentController) Create(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"status_code":       fiber.StatusCreated,
 		"message":           "global instrument created successfully",
-		"global_instrument": req,
+		"global_instrument": instrument,
 	})
 }
 
 // Update (also handles soft delete/undelete)
 func (ctl *AdminGlobalInstrumentController) Update(c *fiber.Ctx) error {
 	id := c.Params("id")
-	var req models.GlobalInstrument
+	var req globalInstrumentUpsertRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
@@ -223,13 +286,43 @@ func (ctl *AdminGlobalInstrumentController) Update(c *fiber.Ctx) error {
 			"error":       "invalid request payload",
 		})
 	}
-	if err := validator.ValidateGlobalInstrument(&req); err != nil {
+
+	expiry, err := parseGlobalInstrumentExpiry(req.Expiry)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "expiry must be in dd-mm-yy format",
+			"error":       "expiry must be in dd-mm-yy format",
+		})
+	}
+
+	incoming := models.GlobalInstrument{
+		InstrumentToken:     req.InstrumentToken,
+		ExchangeToken:       req.ExchangeToken,
+		TradingSymbol:       req.TradingSymbol,
+		Name:                req.Name,
+		SubscribeSymbolName: req.SubscribeSymbolName,
+		Symbol:              req.Symbol,
+		LastPrice:           req.LastPrice,
+		Expiry:              expiry,
+		TickSize:            req.TickSize,
+		LotSize:             req.LotSize,
+		InstrumentType:      req.InstrumentType,
+		Segment:             req.Segment,
+		Exchange:            req.Exchange,
+		Strike:              req.Strike,
+		Status:              req.Status,
+		IsDeleted:           req.IsDeleted,
+	}
+
+	if err := validator.ValidateGlobalInstrument(&incoming); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
 			"message":     err.Error(),
 			"error":       err.Error(),
 		})
 	}
+
 	var instrument models.GlobalInstrument
 	if err := ctl.DB.First(&instrument, "id = ?", id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -245,23 +338,23 @@ func (ctl *AdminGlobalInstrumentController) Update(c *fiber.Ctx) error {
 			"error":       "failed to fetch global instrument",
 		})
 	}
-	instrument.Name = req.Name
-	instrument.InstrumentToken = req.InstrumentToken
-	instrument.ExchangeToken = req.ExchangeToken
-	instrument.TradingSymbol = req.TradingSymbol
-	instrument.SubscribeSymbolName = req.SubscribeSymbolName
-	instrument.LastPrice = req.LastPrice
-	instrument.Expiry = req.Expiry
-	instrument.TickSize = req.TickSize
-	instrument.LotSize = req.LotSize
-	instrument.InstrumentType = req.InstrumentType
-	instrument.Segment = req.Segment
-	instrument.Exchange = req.Exchange
-	instrument.Strike = req.Strike
-	instrument.Symbol = req.Symbol
-	instrument.Status = req.Status
+	instrument.Name = incoming.Name
+	instrument.InstrumentToken = incoming.InstrumentToken
+	instrument.ExchangeToken = incoming.ExchangeToken
+	instrument.TradingSymbol = incoming.TradingSymbol
+	instrument.SubscribeSymbolName = incoming.SubscribeSymbolName
+	instrument.LastPrice = incoming.LastPrice
+	instrument.Expiry = incoming.Expiry
+	instrument.TickSize = incoming.TickSize
+	instrument.LotSize = incoming.LotSize
+	instrument.InstrumentType = incoming.InstrumentType
+	instrument.Segment = incoming.Segment
+	instrument.Exchange = incoming.Exchange
+	instrument.Strike = incoming.Strike
+	instrument.Symbol = incoming.Symbol
+	instrument.Status = incoming.Status
 	// Soft delete/undelete logic
-	instrument.IsDeleted = req.IsDeleted
+	instrument.IsDeleted = incoming.IsDeleted
 	if err := ctl.DB.Save(&instrument).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
