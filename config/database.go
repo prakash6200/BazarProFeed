@@ -39,15 +39,14 @@ BEGIN
 	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'EQUITY';
 
 	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'instrument_exchange') THEN
-		CREATE TYPE instrument_exchange AS ENUM ('CDS', 'CEPE', 'MCX', 'MCX-MINI', 'NCO', 'NFO', 'NSE');
+		CREATE TYPE instrument_exchange AS ENUM ('NSE', 'MCX', 'MCX-MINI', 'CE-PE', 'CDS', 'NSE-EQU');
 	END IF;
-	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'CDS';
-	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'CEPE';
+	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'NSE';
 	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'MCX';
 	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'MCX-MINI';
-	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'NCO';
-	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'NFO';
-	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'NSE';
+	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'CE-PE';
+	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'CDS';
+	ALTER TYPE instrument_exchange ADD VALUE IF NOT EXISTS 'NSE-EQU';
 
 	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'global_market_segment') THEN
 		CREATE TYPE global_market_segment AS ENUM ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
@@ -250,12 +249,28 @@ BEGIN
 
 		IF exchange_udt = 'instrument_exchange' THEN
 			UPDATE instruments
-			SET exchange = 'NFO'::instrument_exchange
-			WHERE exchange IS NULL OR UPPER(TRIM(exchange::text)) NOT IN ('CDS', 'CEPE', 'MCX', 'MCX-MINI', 'NCO', 'NFO', 'NSE');
+			SET exchange = 'CE-PE'::instrument_exchange
+			WHERE UPPER(TRIM(exchange::text)) = 'CEPE';
+
+			UPDATE instruments
+			SET exchange = 'NSE-EQU'::instrument_exchange
+			WHERE UPPER(TRIM(exchange::text)) IN ('NFO', 'NCO');
+
+			UPDATE instruments
+			SET exchange = 'NSE'::instrument_exchange
+			WHERE exchange IS NULL OR UPPER(TRIM(exchange::text)) NOT IN ('NSE', 'MCX', 'MCX-MINI', 'CE-PE', 'CDS', 'NSE-EQU');
 		ELSE
 			UPDATE instruments
-			SET exchange = 'NFO'
-			WHERE exchange IS NULL OR UPPER(TRIM(exchange::text)) NOT IN ('CDS', 'CEPE', 'MCX', 'MCX-MINI', 'NCO', 'NFO', 'NSE');
+			SET exchange = 'CE-PE'
+			WHERE UPPER(TRIM(exchange::text)) = 'CEPE';
+
+			UPDATE instruments
+			SET exchange = 'NSE-EQU'
+			WHERE UPPER(TRIM(exchange::text)) IN ('NFO', 'NCO');
+
+			UPDATE instruments
+			SET exchange = 'NSE'
+			WHERE exchange IS NULL OR UPPER(TRIM(exchange::text)) NOT IN ('NSE', 'MCX', 'MCX-MINI', 'CE-PE', 'CDS', 'NSE-EQU');
 
 			ALTER TABLE instruments
 				ALTER COLUMN exchange DROP DEFAULT;
@@ -266,10 +281,17 @@ BEGIN
 		END IF;
 
 		ALTER TABLE instruments
-			ALTER COLUMN exchange SET DEFAULT 'NFO';
+			ALTER COLUMN exchange SET DEFAULT 'NSE';
 
 		ALTER TABLE instruments
 			ALTER COLUMN exchange SET NOT NULL;
+
+		ALTER TABLE instruments
+			DROP CONSTRAINT IF EXISTS instruments_exchange_allowed_chk;
+
+		ALTER TABLE instruments
+			ADD CONSTRAINT instruments_exchange_allowed_chk
+			CHECK (exchange IN ('NSE', 'MCX', 'MCX-MINI', 'CE-PE', 'CDS', 'NSE-EQU'));
 	END IF;
 END
 $$;`

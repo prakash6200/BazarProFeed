@@ -81,13 +81,12 @@ var allowedSegments = map[string]struct{}{
 }
 
 var allowedExchanges = map[string]struct{}{
-	"CDS":      {},
-	"CEPE":     {},
+	"NSE":      {},
 	"MCX":      {},
 	"MCX-MINI": {},
-	"NCO":      {},
-	"NFO":      {},
-	"NSE":      {},
+	"CE-PE":    {},
+	"CDS":      {},
+	"NSE-EQU":  {},
 }
 
 func isAllowedEnumValue(value string, allowed map[string]struct{}) bool {

@@ -28,7 +28,7 @@ type Instrument struct {
 	LotSize         int        `json:"lot_size"`
 	InstrumentType  string     `json:"instrument_type"`
 	Segment         string     `gorm:"type:instrument_segment;not null;default:'NFO-FUT';index" json:"segment"`
-	Exchange        string     `gorm:"type:instrument_exchange;not null;default:'NFO';index" json:"exchange"`
+	Exchange        string     `gorm:"type:instrument_exchange;not null;default:'NSE';index" json:"exchange"`
 	Status          string     `gorm:"type:instrument_status;not null;default:'ACTIVE';index" json:"status"`
 	IsDeleted       bool       `gorm:"not null;default:false;index" json:"is_deleted"`
 	CreatedAt       time.Time  `json:"created_at"`
@@ -50,13 +50,12 @@ const (
 	InstrumentSegmentNFOOpt = "NFO-OPT"
 	InstrumentSegmentEquity = "EQUITY"
 
-	InstrumentExchangeCDS     = "CDS"
-	InstrumentExchangeCEPE    = "CEPE"
+	InstrumentExchangeNSE     = "NSE"
 	InstrumentExchangeMCX     = "MCX"
 	InstrumentExchangeMCXMini = "MCX-MINI"
-	InstrumentExchangeNCO     = "NCO"
-	InstrumentExchangeNFO     = "NFO"
-	InstrumentExchangeNSE     = "NSE"
+	InstrumentExchangeCEPE    = "CE-PE"
+	InstrumentExchangeCDS     = "CDS"
+	InstrumentExchangeNSEEqu  = "NSE-EQU"
 )
 
 var allowedInstrumentSegments = map[string]struct{}{
@@ -75,13 +74,12 @@ var allowedInstrumentTypes = map[string]struct{}{
 }
 
 var allowedInstrumentExchanges = map[string]struct{}{
-	InstrumentExchangeCDS:     {},
-	InstrumentExchangeCEPE:    {},
+	InstrumentExchangeNSE:     {},
 	InstrumentExchangeMCX:     {},
 	InstrumentExchangeMCXMini: {},
-	InstrumentExchangeNCO:     {},
-	InstrumentExchangeNFO:     {},
-	InstrumentExchangeNSE:     {},
+	InstrumentExchangeCEPE:    {},
+	InstrumentExchangeCDS:     {},
+	InstrumentExchangeNSEEqu:  {},
 }
 
 func NormalizeInstrumentStatus(status string) string {
@@ -105,7 +103,7 @@ func NormalizeInstrumentExchange(exchange string) string {
 	if _, ok := allowedInstrumentExchanges[trimmed]; ok {
 		return trimmed
 	}
-	return InstrumentExchangeNFO
+	return InstrumentExchangeNSE
 }
 
 func NormalizeInstrumentType(instrumentType string) string {
