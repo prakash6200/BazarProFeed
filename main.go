@@ -138,8 +138,10 @@ func main() {
 
 	socketHub.RegisterRoutes(app, "/feed")
 	socketHub.RegisterSingleInstrumentRoutes(app, "/feed/one")
+	socketHub.RegisterBulkInstrumentRoutes(app, "/feed/bulk")
 	globSocketHub.RegisterRoutes(app, "/globalfeed")
 	globSocketHub.RegisterSingleInstrumentRoutes(app, "/globalfeed/one")
+	globSocketHub.RegisterBulkInstrumentRoutes(app, "/globalfeed/bulk")
 
 	events, unsubscribe := tickHub.Subscribe(1024)
 	defer unsubscribe()

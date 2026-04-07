@@ -20,16 +20,17 @@ import (
 )
 
 const (
-	socketPingPeriod = 25 * time.Second
-	socketWriteWait  = 10 * time.Second
+	socketPingPeriod     = 25 * time.Second
+	socketWriteWait      = 10 * time.Second
+	socketMaxBulkFilters = 100
 )
 
 type socketClient struct {
-	conn      *ws.Conn
-	userToken string
-	userID    string
-	filterSym string
-	mu        sync.Mutex
+	conn       *ws.Conn
+	userToken  string
+	userID     string
+	filterSyms map[string]struct{}
+	mu         sync.Mutex
 }
 
 type socketJWTClaims struct {
@@ -99,7 +100,7 @@ func (h *SocketHub) RegisterRoutes(app *fiber.App, path string) {
 		client := &socketClient{conn: c, userToken: token, userID: user.ID}
 		h.addClient(client)
 		log.Printf("websocket client connected: user=%s, token=%s", user.Username, maskToken(token))
-		defer h.removeClient(client, "")
+		defer h.removeClient(client)
 
 		if h.initialStateGetter != nil {
 			initCtx, initCancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -188,10 +189,10 @@ func (h *SocketHub) RegisterSingleInstrumentRoutes(app *fiber.App, path string) 
 			return
 		}
 
-		client := &socketClient{conn: c, userToken: token, userID: user.ID, filterSym: filterSymbol}
+		client := &socketClient{conn: c, userToken: token, userID: user.ID, filterSyms: makeSymbolSet([]string{filterSymbol})}
 		h.addClient(client)
 		log.Printf("filtered websocket connected: user=%s symbol=%s", user.Username, filterSymbol)
-		defer h.removeClient(client, filterSymbol)
+		defer h.removeClient(client)
 
 		if h.initialStateGetter != nil {
 			initCtx, initCancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -201,6 +202,98 @@ func (h *SocketHub) RegisterSingleInstrumentRoutes(app *fiber.App, path string) 
 				_ = c.SetWriteDeadline(time.Now().Add(socketWriteWait))
 				_ = c.WriteMessage(ws.TextMessage, raw)
 				client.mu.Unlock()
+			}
+		}
+
+		done := make(chan struct{})
+		defer close(done)
+
+		go func(conn *ws.Conn, writeMu *sync.Mutex, finished <-chan struct{}) {
+			ticker := time.NewTicker(socketPingPeriod)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-finished:
+					return
+				case <-ticker.C:
+					writeMu.Lock()
+					_ = conn.SetWriteDeadline(time.Now().Add(socketWriteWait))
+					err := conn.WriteControl(ws.PingMessage, []byte("ping"), time.Now().Add(socketWriteWait))
+					writeMu.Unlock()
+					if err != nil {
+						_ = conn.Close()
+						return
+					}
+				}
+			}
+		}(c, &client.mu, done)
+
+		for {
+			if _, _, err := c.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+}
+
+func (h *SocketHub) RegisterBulkInstrumentRoutes(app *fiber.App, path string) {
+	app.Use(path, func(c *fiber.Ctx) error {
+		if ws.IsWebSocketUpgrade(c) {
+			return c.Next()
+		}
+		return fiber.ErrUpgradeRequired
+	})
+
+	app.Get(path, ws.New(func(c *ws.Conn) {
+		token := strings.TrimSpace(c.Query("token"))
+		if token == "" {
+			_ = c.WriteJSON(fiber.Map{"status_code": fiber.StatusUnauthorized, "error": "token required in query parameter"})
+			_ = c.Close()
+			return
+		}
+
+		user, err := h.resolveUserFromSocketToken(token)
+		if err != nil {
+			_ = c.WriteJSON(fiber.Map{"status_code": fiber.StatusUnauthorized, "error": "invalid token"})
+			_ = c.Close()
+			return
+		}
+
+		if !user.IsActive {
+			_ = c.WriteJSON(fiber.Map{"status_code": fiber.StatusForbidden, "error": "user account is disabled"})
+			_ = c.Close()
+			return
+		}
+
+		if user.IsTokenExpired() {
+			_ = c.WriteJSON(fiber.Map{"status_code": fiber.StatusUnauthorized, "error": "token expired", "message": "please refresh your token"})
+			_ = c.Close()
+			return
+		}
+
+		filterSymbols, err := h.resolveBulkFilterSymbols(c.Query("symbols"), c.Query("instrument_tokens"))
+		if err != nil {
+			_ = c.WriteJSON(fiber.Map{"status_code": fiber.StatusBadRequest, "error": err.Error()})
+			_ = c.Close()
+			return
+		}
+
+		client := &socketClient{conn: c, userToken: token, userID: user.ID, filterSyms: makeSymbolSet(filterSymbols)}
+		h.addClient(client)
+		log.Printf("bulk filtered websocket connected: user=%s symbols=%d", user.Username, len(filterSymbols))
+		defer h.removeClient(client)
+
+		if h.initialStateGetter != nil {
+			initCtx, initCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer initCancel()
+			for _, symbol := range filterSymbols {
+				for _, raw := range h.initialStateGetter(initCtx, symbol) {
+					client.mu.Lock()
+					_ = c.SetWriteDeadline(time.Now().Add(socketWriteWait))
+					_ = c.WriteMessage(ws.TextMessage, raw)
+					client.mu.Unlock()
+				}
 			}
 		}
 
@@ -248,8 +341,8 @@ func (h *SocketHub) BroadcastJSON(payload any) {
 	failedClients := make([]*socketClient, 0, len(clients))
 
 	for _, client := range clients {
-		if client.filterSym != "" {
-			if broadcastSymbol == "" || !strings.EqualFold(client.filterSym, broadcastSymbol) {
+		if len(client.filterSyms) > 0 {
+			if broadcastSymbol == "" || !client.matchesSymbol(broadcastSymbol) {
 				continue
 			}
 		}
@@ -288,15 +381,15 @@ func (h *SocketHub) addClient(client *socketClient) {
 	h.mu.Unlock()
 }
 
-func (h *SocketHub) removeClient(client *socketClient, filterSymbol string) {
+func (h *SocketHub) removeClient(client *socketClient) {
 	h.mu.Lock()
 	delete(h.clients, client)
 	h.mu.Unlock()
 	client.mu.Lock()
 	_ = client.conn.Close()
 	client.mu.Unlock()
-	if filterSymbol != "" {
-		log.Printf("filtered websocket disconnected: symbol=%s", filterSymbol)
+	if len(client.filterSyms) > 0 {
+		log.Printf("filtered websocket disconnected: symbols=%d", len(client.filterSyms))
 	}
 }
 
@@ -398,26 +491,171 @@ func (h *SocketHub) resolveFilterSymbol(rawSymbol, rawToken string) (string, err
 	if err != nil || parsedToken <= 0 {
 		return "", errors.New("instrument_token must be a positive integer")
 	}
-
-	var instrument models.Instrument
-	err = h.db.Where("instrument_token = ? AND is_deleted = ?", parsedToken, false).First(&instrument).Error
+	resolvedByToken, err := h.resolveSymbolsByInstrumentTokens([]int64{parsedToken})
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", errors.New("instrument not found for provided instrument_token")
-		}
-		return "", errors.New("failed to resolve instrument_token")
+		return "", err
 	}
-
-	if !instrument.IsActive() {
-		return "", errors.New("instrument is inactive")
+	resolvedSymbol, ok := resolvedByToken[parsedToken]
+	if !ok {
+		return "", errors.New("instrument not found for provided instrument_token")
 	}
-
-	resolvedSymbol := strings.ToUpper(strings.TrimSpace(instrument.TradingSymbol))
-	if resolvedSymbol == "" {
-		return "", errors.New("instrument symbol is empty")
-	}
-
 	return resolvedSymbol, nil
+}
+
+func (h *SocketHub) resolveBulkFilterSymbols(rawSymbols, rawTokens string) ([]string, error) {
+	rawSymbolItems := splitCSVValues(rawSymbols)
+	rawTokenItems := splitCSVValues(rawTokens)
+
+	if len(rawSymbolItems) == 0 && len(rawTokenItems) == 0 {
+		return nil, errors.New("symbols or instrument_tokens query param is required")
+	}
+
+	if len(rawSymbolItems)+len(rawTokenItems) > socketMaxBulkFilters {
+		return nil, errors.New("too many bulk filters requested")
+	}
+
+	set := make(map[string]struct{})
+	result := make([]string, 0, len(rawSymbolItems)+len(rawTokenItems))
+
+	for _, symbol := range rawSymbolItems {
+		resolved, err := h.resolveFilterSymbol(symbol, "")
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := set[resolved]; !ok {
+			set[resolved] = struct{}{}
+			result = append(result, resolved)
+		}
+	}
+
+	parsedTokens := make([]int64, 0, len(rawTokenItems))
+	for _, token := range rawTokenItems {
+		parsedToken, err := strconv.ParseInt(strings.TrimSpace(token), 10, 64)
+		if err != nil || parsedToken <= 0 {
+			return nil, errors.New("instrument_token must be a positive integer")
+		}
+		parsedTokens = append(parsedTokens, parsedToken)
+	}
+
+	resolvedByToken, err := h.resolveSymbolsByInstrumentTokens(parsedTokens)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, parsedToken := range parsedTokens {
+		resolved, ok := resolvedByToken[parsedToken]
+		if !ok {
+			return nil, errors.New("instrument not found for provided instrument_token")
+		}
+
+		if _, ok := set[resolved]; !ok {
+			set[resolved] = struct{}{}
+			result = append(result, resolved)
+		}
+	}
+
+	if len(result) == 0 {
+		return nil, errors.New("no valid symbols resolved for bulk subscribe")
+	}
+
+	return result, nil
+}
+
+func (h *SocketHub) resolveSymbolsByInstrumentTokens(tokens []int64) (map[int64]string, error) {
+	if len(tokens) == 0 {
+		return map[int64]string{}, nil
+	}
+
+	resolved := make(map[int64]string, len(tokens))
+
+	var instruments []models.Instrument
+	if err := h.db.
+		Select("instrument_token", "trading_symbol", "status", "is_deleted").
+		Where("instrument_token IN ? AND is_deleted = ?", tokens, false).
+		Find(&instruments).Error; err != nil {
+		return nil, errors.New("failed to resolve instrument_token")
+	}
+
+	for _, instrument := range instruments {
+		if !instrument.IsActive() {
+			continue
+		}
+		symbol := strings.ToUpper(strings.TrimSpace(instrument.TradingSymbol))
+		if symbol == "" {
+			continue
+		}
+		resolved[instrument.InstrumentToken] = symbol
+	}
+
+	unresolved := make([]int64, 0)
+	for _, token := range tokens {
+		if _, ok := resolved[token]; !ok {
+			unresolved = append(unresolved, token)
+		}
+	}
+
+	if len(unresolved) == 0 {
+		return resolved, nil
+	}
+
+	var globalInstruments []models.GlobalInstrument
+	if err := h.db.
+		Select("instrument_token", "symbol", "trading_symbol", "status", "is_deleted").
+		Where("instrument_token IN ? AND is_deleted = ?", unresolved, false).
+		Find(&globalInstruments).Error; err != nil {
+		return nil, errors.New("failed to resolve instrument_token")
+	}
+
+	for _, instrument := range globalInstruments {
+		if !instrument.IsActive() {
+			continue
+		}
+		symbol := strings.ToUpper(strings.TrimSpace(instrument.Symbol))
+		if symbol == "" {
+			symbol = strings.ToUpper(strings.TrimSpace(instrument.TradingSymbol))
+		}
+		if symbol == "" {
+			continue
+		}
+		resolved[instrument.InstrumentToken] = symbol
+	}
+
+	return resolved, nil
+}
+
+func splitCSVValues(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+func makeSymbolSet(symbols []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(symbols))
+	for _, symbol := range symbols {
+		normalized := strings.ToUpper(strings.TrimSpace(symbol))
+		if normalized != "" {
+			set[normalized] = struct{}{}
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
+func (c *socketClient) matchesSymbol(symbol string) bool {
+	if len(c.filterSyms) == 0 {
+		return true
+	}
+	normalized := strings.ToUpper(strings.TrimSpace(symbol))
+	_, ok := c.filterSyms[normalized]
+	return ok
 }
 
 func extractSymbolFromPayload(payload any) string {
