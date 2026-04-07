@@ -30,16 +30,13 @@ BEGIN
 	END IF;
 
 	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'instrument_segment') THEN
-		CREATE TYPE instrument_segment AS ENUM ('INDICES', 'CDS-FUT', 'CDS-OPT', 'MCX-FUT', 'MCX-OPT', 'NCO-FUT', 'NFO-FUT', 'NFO-OPT');
+		CREATE TYPE instrument_segment AS ENUM ('NFO-FUT', 'MCX-FUT', 'NFO-OPT', 'CDS-FUT', 'EQUITY');
 	END IF;
-	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'INDICES';
-	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'CDS-FUT';
-	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'CDS-OPT';
-	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'MCX-FUT';
-	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'MCX-OPT';
-	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'NCO-FUT';
 	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'NFO-FUT';
+	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'MCX-FUT';
 	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'NFO-OPT';
+	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'CDS-FUT';
+	ALTER TYPE instrument_segment ADD VALUE IF NOT EXISTS 'EQUITY';
 
 	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'instrument_exchange') THEN
 		CREATE TYPE instrument_exchange AS ENUM ('CDS', 'CEPE', 'MCX', 'MCX-MINI', 'NCO', 'NFO', 'NSE');
@@ -188,12 +185,20 @@ BEGIN
 
 		IF segment_udt = 'instrument_segment' THEN
 			UPDATE instruments
+			SET segment = 'EQUITY'::instrument_segment
+			WHERE UPPER(TRIM(segment::text)) = 'INDICES';
+
+			UPDATE instruments
 			SET segment = 'NFO-FUT'::instrument_segment
-			WHERE segment IS NULL OR UPPER(TRIM(segment::text)) NOT IN ('INDICES', 'CDS-FUT', 'CDS-OPT', 'MCX-FUT', 'MCX-OPT', 'NCO-FUT', 'NFO-FUT', 'NFO-OPT');
+			WHERE segment IS NULL OR UPPER(TRIM(segment::text)) NOT IN ('NFO-FUT', 'MCX-FUT', 'NFO-OPT', 'CDS-FUT', 'EQUITY');
 		ELSE
 			UPDATE instruments
+			SET segment = 'EQUITY'
+			WHERE UPPER(TRIM(segment::text)) = 'INDICES';
+
+			UPDATE instruments
 			SET segment = 'NFO-FUT'
-			WHERE segment IS NULL OR UPPER(TRIM(segment::text)) NOT IN ('INDICES', 'CDS-FUT', 'CDS-OPT', 'MCX-FUT', 'MCX-OPT', 'NCO-FUT', 'NFO-FUT', 'NFO-OPT');
+			WHERE segment IS NULL OR UPPER(TRIM(segment::text)) NOT IN ('NFO-FUT', 'MCX-FUT', 'NFO-OPT', 'CDS-FUT', 'EQUITY');
 
 			ALTER TABLE instruments
 				ALTER COLUMN segment DROP DEFAULT;
@@ -208,6 +213,13 @@ BEGIN
 
 		ALTER TABLE instruments
 			ALTER COLUMN segment SET NOT NULL;
+
+		ALTER TABLE instruments
+			DROP CONSTRAINT IF EXISTS instruments_segment_allowed_chk;
+
+		ALTER TABLE instruments
+			ADD CONSTRAINT instruments_segment_allowed_chk
+			CHECK (segment IN ('NFO-FUT', 'MCX-FUT', 'NFO-OPT', 'CDS-FUT', 'EQUITY'));
 	END IF;
 END
 $$;`

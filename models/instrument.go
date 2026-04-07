@@ -44,14 +44,11 @@ const (
 	InstrumentTypeFUT = "FUT"
 	InstrumentTypePE  = "PE"
 
-	InstrumentSegmentIndices = "INDICES"
-	InstrumentSegmentCDSFut  = "CDS-FUT"
-	InstrumentSegmentCDSOpt  = "CDS-OPT"
-	InstrumentSegmentMCXFut  = "MCX-FUT"
-	InstrumentSegmentMCXOpt  = "MCX-OPT"
-	InstrumentSegmentNCOFut  = "NCO-FUT"
-	InstrumentSegmentNFOFut  = "NFO-FUT"
-	InstrumentSegmentNFOOpt  = "NFO-OPT"
+	InstrumentSegmentCDSFut = "CDS-FUT"
+	InstrumentSegmentMCXFut = "MCX-FUT"
+	InstrumentSegmentNFOFut = "NFO-FUT"
+	InstrumentSegmentNFOOpt = "NFO-OPT"
+	InstrumentSegmentEquity = "EQUITY"
 
 	InstrumentExchangeCDS     = "CDS"
 	InstrumentExchangeCEPE    = "CEPE"
@@ -63,14 +60,11 @@ const (
 )
 
 var allowedInstrumentSegments = map[string]struct{}{
-	InstrumentSegmentIndices: {},
-	InstrumentSegmentCDSFut:  {},
-	InstrumentSegmentCDSOpt:  {},
-	InstrumentSegmentMCXFut:  {},
-	InstrumentSegmentMCXOpt:  {},
-	InstrumentSegmentNCOFut:  {},
-	InstrumentSegmentNFOFut:  {},
-	InstrumentSegmentNFOOpt:  {},
+	InstrumentSegmentNFOFut: {},
+	InstrumentSegmentMCXFut: {},
+	InstrumentSegmentNFOOpt: {},
+	InstrumentSegmentCDSFut: {},
+	InstrumentSegmentEquity: {},
 }
 
 var allowedInstrumentTypes = map[string]struct{}{
