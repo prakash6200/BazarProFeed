@@ -125,6 +125,14 @@ func ValidateCreateInstrument(c *fiber.Ctx) error {
 	req.Exchange = strings.ToUpper(strings.TrimSpace(req.Exchange))
 	req.Status = strings.TrimSpace(req.Status)
 
+	if req.InstrumentType == "" || !isAllowedEnumValue(req.InstrumentType, allowedInstrumentTypes) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "instrument_type must be one of: " + allowedEnumValues(allowedInstrumentTypes),
+			"error":       "instrument_type must be one of: " + allowedEnumValues(allowedInstrumentTypes),
+		})
+	}
+
 	if req.InstrumentToken <= 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
@@ -207,7 +215,14 @@ func ValidateUpdateInstrument(c *fiber.Ctx) error {
 	}
 
 	if req.InstrumentType != nil {
-		trimmed := strings.TrimSpace(*req.InstrumentType)
+		trimmed := strings.ToUpper(strings.TrimSpace(*req.InstrumentType))
+		if trimmed == "" || !isAllowedEnumValue(trimmed, allowedInstrumentTypes) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "instrument_type must be one of: " + allowedEnumValues(allowedInstrumentTypes),
+				"error":       "instrument_type must be one of: " + allowedEnumValues(allowedInstrumentTypes),
+			})
+		}
 		req.InstrumentType = &trimmed
 	}
 

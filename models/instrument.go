@@ -39,6 +39,11 @@ const (
 	InstrumentStatusActive   = "ACTIVE"
 	InstrumentStatusInactive = "INACTIVE"
 
+	InstrumentTypeCE  = "CE"
+	InstrumentTypeEQ  = "EQ"
+	InstrumentTypeFUT = "FUT"
+	InstrumentTypePE  = "PE"
+
 	InstrumentSegmentIndices = "INDICES"
 	InstrumentSegmentCDSFut  = "CDS-FUT"
 	InstrumentSegmentCDSOpt  = "CDS-OPT"
@@ -66,6 +71,13 @@ var allowedInstrumentSegments = map[string]struct{}{
 	InstrumentSegmentNCOFut:  {},
 	InstrumentSegmentNFOFut:  {},
 	InstrumentSegmentNFOOpt:  {},
+}
+
+var allowedInstrumentTypes = map[string]struct{}{
+	InstrumentTypeCE:  {},
+	InstrumentTypeEQ:  {},
+	InstrumentTypeFUT: {},
+	InstrumentTypePE:  {},
 }
 
 var allowedInstrumentExchanges = map[string]struct{}{
@@ -102,6 +114,14 @@ func NormalizeInstrumentExchange(exchange string) string {
 	return InstrumentExchangeNFO
 }
 
+func NormalizeInstrumentType(instrumentType string) string {
+	trimmed := strings.ToUpper(strings.TrimSpace(instrumentType))
+	if _, ok := allowedInstrumentTypes[trimmed]; ok {
+		return trimmed
+	}
+	return InstrumentTypeFUT
+}
+
 func IsAllowedInstrumentSegment(segment string) bool {
 	_, ok := allowedInstrumentSegments[strings.ToUpper(strings.TrimSpace(segment))]
 	return ok
@@ -109,6 +129,11 @@ func IsAllowedInstrumentSegment(segment string) bool {
 
 func IsAllowedInstrumentExchange(exchange string) bool {
 	_, ok := allowedInstrumentExchanges[strings.ToUpper(strings.TrimSpace(exchange))]
+	return ok
+}
+
+func IsAllowedInstrumentType(instrumentType string) bool {
+	_, ok := allowedInstrumentTypes[strings.ToUpper(strings.TrimSpace(instrumentType))]
 	return ok
 }
 
@@ -250,6 +275,10 @@ func parseInstrumentCSVRecord(record []string) (*Instrument, error) {
 
 	rawSegment := strings.TrimSpace(record[10])
 	rawExchange := strings.TrimSpace(record[11])
+	rawInstrumentType := strings.TrimSpace(record[9])
+	if !IsAllowedInstrumentType(rawInstrumentType) {
+		return nil, fmt.Errorf("invalid instrument_type: %s", rawInstrumentType)
+	}
 	if !IsAllowedInstrumentSegment(rawSegment) {
 		return nil, fmt.Errorf("invalid segment: %s", rawSegment)
 	}
@@ -257,6 +286,7 @@ func parseInstrumentCSVRecord(record []string) (*Instrument, error) {
 		return nil, fmt.Errorf("invalid exchange: %s", rawExchange)
 	}
 
+	instrumentType := NormalizeInstrumentType(rawInstrumentType)
 	segment := NormalizeInstrumentSegment(rawSegment)
 	exchange := NormalizeInstrumentExchange(rawExchange)
 
@@ -270,7 +300,7 @@ func parseInstrumentCSVRecord(record []string) (*Instrument, error) {
 		Strike:          strike,
 		TickSize:        tickSize,
 		LotSize:         lotSize,
-		InstrumentType:  strings.TrimSpace(record[9]),
+		InstrumentType:  instrumentType,
 		Segment:         segment,
 		Exchange:        exchange,
 		Status:          InstrumentStatusActive,
@@ -417,6 +447,7 @@ func ImportInstrumentsFromCSV(db *gorm.DB, csvPath string) (*CSVImportResult, er
 
 func CreateInstrument(db *gorm.DB, instrument *Instrument) error {
 	instrument.Status = NormalizeInstrumentStatus(instrument.Status)
+	instrument.InstrumentType = NormalizeInstrumentType(instrument.InstrumentType)
 	instrument.Segment = NormalizeInstrumentSegment(instrument.Segment)
 	instrument.Exchange = NormalizeInstrumentExchange(instrument.Exchange)
 	instrument.IsDeleted = false
@@ -487,6 +518,12 @@ func UpdateInstrumentFields(db *gorm.DB, id string, updates map[string]interface
 	if rawSegment, ok := updates["segment"]; ok {
 		if value, ok := rawSegment.(string); ok {
 			updates["segment"] = NormalizeInstrumentSegment(value)
+		}
+	}
+
+	if rawInstrumentType, ok := updates["instrument_type"]; ok {
+		if value, ok := rawInstrumentType.(string); ok {
+			updates["instrument_type"] = NormalizeInstrumentType(value)
 		}
 	}
 
