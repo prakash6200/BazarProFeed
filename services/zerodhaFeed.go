@@ -468,6 +468,16 @@ func (s *ZerodhaFeedService) getAccessToken() string {
 	return accessToken
 }
 
+// GetAccessToken returns the current access token (exported for sibling services).
+func (s *ZerodhaFeedService) GetAccessToken() string {
+	return s.getAccessToken()
+}
+
+// GetAPIKey returns the configured API key (exported for sibling services).
+func (s *ZerodhaFeedService) GetAPIKey() string {
+	return strings.TrimSpace(s.cfg.APIKey)
+}
+
 func (s *ZerodhaFeedService) setAccessToken(accessToken string) {
 	s.tokenMu.Lock()
 	s.cfg.AccessToken = strings.TrimSpace(accessToken)

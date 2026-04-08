@@ -75,6 +75,11 @@ func main() {
 
 	socketHub := config.NewSocketHub(config.DB)
 
+	// Circuit detector: subscribes to tickHub, detects EQUITY/MCX circuit hits,
+	// broadcasts events via the existing socketHub to all connected clients.
+	circuitDetector := services.NewCircuitDetectorService(tickHub, socketHub, zerodhaFeedService, config.DB)
+	circuitDetector.Start(ctx)
+
 	defer func() {
 		config.CloseRedis()
 		if err := config.CloseDatabase(); err != nil {
