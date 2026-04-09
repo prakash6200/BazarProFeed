@@ -40,7 +40,7 @@ const (
 	maxReconnectBackoff = 30 * time.Second
 	spikeAlertPercent   = 20.0
 
-	zerodhaCircuitRefreshInterval = 15 * time.Minute
+	zerodhaCircuitRefreshInterval = 2 * time.Minute
 	zerodhaQuoteBatchSize         = 400
 	zerodhaQuoteBatchPause        = 500 * time.Millisecond
 
