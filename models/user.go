@@ -23,12 +23,16 @@ type User struct {
 }
 
 const (
-	RoleUser  = "USER"
-	RoleAdmin = "ADMIN"
+	RoleUser       = "USER"
+	RoleAdmin      = "ADMIN"
+	RoleSuperAdmin = "SUPER_ADMIN"
 )
 
 func normalizeRole(role string) string {
 	trimmed := strings.ToUpper(strings.TrimSpace(role))
+	if trimmed == RoleSuperAdmin {
+		return RoleSuperAdmin
+	}
 	if trimmed == RoleAdmin {
 		return RoleAdmin
 	}
@@ -40,7 +44,12 @@ func (u *User) EffectiveRole() string {
 }
 
 func (u *User) IsAdminRole() bool {
-	return u.EffectiveRole() == RoleAdmin
+	role := u.EffectiveRole()
+	return role == RoleAdmin || role == RoleSuperAdmin
+}
+
+func (u *User) IsSuperAdminRole() bool {
+	return u.EffectiveRole() == RoleSuperAdmin
 }
 
 func HashPassword(password string) (string, error) {
@@ -173,4 +182,23 @@ func AdminExists(db *gorm.DB) (bool, error) {
 	var count int64
 	err := db.Model(&User{}).Where("role = ?", RoleAdmin).Count(&count).Error
 	return count > 0, err
+}
+
+func SuperAdminExists(db *gorm.DB) (bool, error) {
+	var count int64
+	err := db.Model(&User{}).Where("role = ?", RoleSuperAdmin).Count(&count).Error
+	return count > 0, err
+}
+
+func GetUsersByRoles(db *gorm.DB, roles ...string) ([]User, error) {
+	if len(roles) == 0 {
+		return nil, nil
+	}
+	normalized := make([]string, 0, len(roles))
+	for _, role := range roles {
+		normalized = append(normalized, normalizeRole(role))
+	}
+	var users []User
+	err := db.Where("role IN ?", normalized).Find(&users).Error
+	return users, err
 }

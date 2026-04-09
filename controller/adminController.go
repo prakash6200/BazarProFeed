@@ -25,6 +25,37 @@ func NewAdminController(db *gorm.DB, socketHub *config.SocketHub) *AdminControll
 
 func (ac *AdminController) CreateUser(c *fiber.Ctx) error {
 	req := c.Locals("validated_request").(validator.CreateUserRequest)
+	actor, ok := c.Locals("user").(*models.User)
+	if !ok || actor == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"status_code": fiber.StatusUnauthorized,
+			"message":     "invalid authenticated user",
+			"error":       "invalid authenticated user",
+		})
+	}
+
+	targetRole := req.Role
+	if targetRole == "" {
+		targetRole = models.RoleUser
+	}
+
+	if actor.IsSuperAdminRole() {
+		if targetRole == models.RoleSuperAdmin {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"status_code": fiber.StatusForbidden,
+				"message":     "super admin creation is not allowed via this endpoint",
+				"error":       "super admin creation is not allowed via this endpoint",
+			})
+		}
+	} else {
+		if targetRole != models.RoleUser {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"status_code": fiber.StatusForbidden,
+				"message":     "admin can only create USER role",
+				"error":       "admin can only create USER role",
+			})
+		}
+	}
 
 	var existingUser models.User
 	if err := ac.db.Where("username = ?", req.Username).First(&existingUser).Error; err == nil {
@@ -42,7 +73,7 @@ func (ac *AdminController) CreateUser(c *fiber.Ctx) error {
 		})
 	}
 
-	user, err := models.CreateUser(ac.db, req.Username, models.RoleUser)
+	user, err := models.CreateUser(ac.db, req.Username, targetRole)
 	if err != nil {
 		log.Printf("error creating user: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -52,7 +83,7 @@ func (ac *AdminController) CreateUser(c *fiber.Ctx) error {
 		})
 	}
 
-	log.Printf("user created: username=%s, id=%s", user.Username, user.ID)
+	log.Printf("user created: username=%s, id=%s, role=%s, created_by=%s", user.Username, user.ID, user.EffectiveRole(), actor.ID)
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"status_code": fiber.StatusCreated,
@@ -60,6 +91,7 @@ func (ac *AdminController) CreateUser(c *fiber.Ctx) error {
 		"user": fiber.Map{
 			"id":                 user.ID,
 			"username":           user.Username,
+			"role":               user.EffectiveRole(),
 			"api_token":          user.APIToken,
 			"token_generated_at": user.TokenGeneratedAt,
 			"is_active":          user.IsActive,
@@ -181,6 +213,14 @@ func (ac *AdminController) UpdateUserStatus(c *fiber.Ctx) error {
 
 func (ac *AdminController) DeleteUser(c *fiber.Ctx) error {
 	userID := c.Params("id")
+	actor, ok := c.Locals("user").(*models.User)
+	if !ok || actor == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"status_code": fiber.StatusUnauthorized,
+			"message":     "invalid authenticated user",
+			"error":       "invalid authenticated user",
+		})
+	}
 
 	user, err := models.GetUserByID(ac.db, userID)
 	if err != nil {
@@ -198,11 +238,19 @@ func (ac *AdminController) DeleteUser(c *fiber.Ctx) error {
 		})
 	}
 
-	if user.IsAdminRole() {
+	if user.ID == actor.ID {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 			"status_code": fiber.StatusForbidden,
-			"message":     "cannot delete admin user",
-			"error":       "cannot delete admin user",
+			"message":     "cannot delete your own account",
+			"error":       "cannot delete your own account",
+		})
+	}
+
+	if !actor.IsSuperAdminRole() && user.IsAdminRole() {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"status_code": fiber.StatusForbidden,
+			"message":     "admin cannot delete ADMIN or SUPER_ADMIN users",
+			"error":       "admin cannot delete ADMIN or SUPER_ADMIN users",
 		})
 	}
 

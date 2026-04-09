@@ -141,35 +141,3 @@ func UserAuth(db *gorm.DB) fiber.Handler {
 		return c.Next()
 	}
 }
-
-func AdminOnlyAuth(c *fiber.Ctx) error {
-	claimsValue := c.Locals("jwt_claims")
-	_, ok := claimsValue.(*UserJWTClaims)
-	if !ok {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"status_code": fiber.StatusUnauthorized,
-			"message":     "invalid jwt claims",
-			"error":       "invalid jwt claims",
-		})
-	}
-
-	userValue := c.Locals("user")
-	user, ok := userValue.(*models.User)
-	if !ok || user == nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"status_code": fiber.StatusUnauthorized,
-			"message":     "invalid authenticated user",
-			"error":       "invalid authenticated user",
-		})
-	}
-
-	if !user.IsAdminRole() {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
-			"status_code": fiber.StatusForbidden,
-			"message":     "admin access required",
-			"error":       "admin access required",
-		})
-	}
-
-	return c.Next()
-}

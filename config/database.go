@@ -22,8 +22,11 @@ func ensureEnumTypes(db *gorm.DB) error {
 DO $$
 BEGIN
 	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
-		CREATE TYPE user_role AS ENUM ('USER', 'ADMIN');
+		CREATE TYPE user_role AS ENUM ('USER', 'ADMIN', 'SUPER_ADMIN');
 	END IF;
+	ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'USER';
+	ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'ADMIN';
+	ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'SUPER_ADMIN';
 
 	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'instrument_status') THEN
 		CREATE TYPE instrument_status AS ENUM ('ACTIVE', 'INACTIVE');
@@ -85,11 +88,11 @@ BEGIN
 		IF role_udt = 'user_role' THEN
 			UPDATE users
 			SET role = 'USER'::user_role
-			WHERE role IS NULL OR UPPER(role::text) NOT IN ('USER', 'ADMIN');
+			WHERE role IS NULL OR UPPER(role::text) NOT IN ('USER', 'ADMIN', 'SUPER_ADMIN');
 		ELSE
 			UPDATE users
 			SET role = 'USER'
-			WHERE role IS NULL OR UPPER(TRIM(role::text)) NOT IN ('USER', 'ADMIN');
+			WHERE role IS NULL OR UPPER(TRIM(role::text)) NOT IN ('USER', 'ADMIN', 'SUPER_ADMIN');
 
 			ALTER TABLE users
 				ALTER COLUMN role DROP DEFAULT;
@@ -434,7 +437,14 @@ func ConnectDatabase() {
 		log.Fatal("failed to ensure enum types: ", err)
 	}
 
-	if err := db.AutoMigrate(&models.User{}, &models.Instrument{}, &models.GlobalInstrument{}, &models.ZerodhaSession{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.User{},
+		&models.AdminPermission{},
+		&models.AdminAPIAuditLog{},
+		&models.Instrument{},
+		&models.GlobalInstrument{},
+		&models.ZerodhaSession{},
+	); err != nil {
 		_ = sqlDB.Close()
 		log.Fatal("failed to run migrations: ", err)
 	}

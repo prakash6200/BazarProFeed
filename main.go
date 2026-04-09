@@ -3,60 +3,25 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"feedprovider/config"
 	"feedprovider/controller"
-	"feedprovider/models"
 	"feedprovider/router"
 	"feedprovider/services"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"gorm.io/gorm"
 )
-
-func seedDefaultAdmin(db *gorm.DB) {
-	exists, err := models.AdminExists(db)
-	if err != nil {
-		log.Printf("failed to check admin existence: %v", err)
-		return
-	}
-
-	if exists {
-		log.Println("admin user already exists, skipping seed")
-		return
-	}
-
-	adminUsername := "admin@gmail.com"
-	adminPassword := "Admin@123"
-
-	admin, err := models.CreateUserWithPassword(db, adminUsername, adminPassword, models.RoleAdmin)
-	if err != nil {
-		log.Printf("failed to create default admin: %v", err)
-		return
-	}
-
-	fmt.Println("\n" + strings.Repeat("=", 80))
-	fmt.Println("DEFAULT ADMIN CREATED")
-	fmt.Println(strings.Repeat("=", 80))
-	fmt.Printf("Email:      %s\n", admin.Username)
-	fmt.Printf("Password:   %s\n", adminPassword)
-	fmt.Println(strings.Repeat("=", 80))
-	fmt.Println("Use /auth/login with these credentials to get admin JWT token")
-	fmt.Println(strings.Repeat("=", 80) + "\n")
-}
 
 func main() {
 	config.LoadConfig()
 	config.ConnectDatabase()
 	config.ConnectRedis()
 
-	seedDefaultAdmin(config.DB)
+	config.SeedSecurityData(config.DB)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

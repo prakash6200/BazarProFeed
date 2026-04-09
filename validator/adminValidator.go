@@ -8,6 +8,7 @@ import (
 
 type CreateUserRequest struct {
 	Username string `json:"username"`
+	Role     string `json:"role"`
 }
 
 type UpdateStatusRequest struct {
@@ -30,6 +31,7 @@ func ValidateCreateUser(c *fiber.Ctx) error {
 	}
 
 	req.Username = strings.TrimSpace(req.Username)
+	req.Role = strings.ToUpper(strings.TrimSpace(req.Role))
 	if req.Username == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
@@ -51,6 +53,18 @@ func ValidateCreateUser(c *fiber.Ctx) error {
 			"status_code": fiber.StatusBadRequest,
 			"message":     "username must not exceed 50 characters",
 			"error":       "username must not exceed 50 characters",
+		})
+	}
+
+	if req.Role == "" {
+		req.Role = "USER"
+	}
+
+	if req.Role != "USER" && req.Role != "ADMIN" && req.Role != "SUPER_ADMIN" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "role must be USER, ADMIN, or SUPER_ADMIN",
+			"error":       "role must be USER, ADMIN, or SUPER_ADMIN",
 		})
 	}
 
