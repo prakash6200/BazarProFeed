@@ -86,6 +86,7 @@ type TickMode string
 type instrumentMeta struct {
 	Mode        TickMode
 	Exchange    string
+	Segment     string
 	Symbol      string
 	Expiry      *time.Time
 	StrikePrice float64
@@ -348,16 +349,18 @@ func (s *ZerodhaFeedService) refreshCircuitLimits(ctx context.Context) {
 	}
 
 	keys := make([]string, 0, len(items))
-	keyToToken := make(map[string]int64, len(items))
+	keySeen := make(map[string]struct{}, len(items)*2)
+	keyToTokens := make(map[string][]int64, len(items)*2)
 	for token, meta := range items {
-		exchange := quoteExchangeFromFeedExchange(meta.Exchange)
-		symbol := strings.TrimSpace(meta.Symbol)
-		if exchange == "" || symbol == "" {
-			continue
+		quoteKeys := quoteKeysForInstrument(meta)
+		for _, key := range quoteKeys {
+			keyToTokens[key] = append(keyToTokens[key], token)
+			if _, ok := keySeen[key]; ok {
+				continue
+			}
+			keySeen[key] = struct{}{}
+			keys = append(keys, key)
 		}
-		key := exchange + ":" + symbol
-		keys = append(keys, key)
-		keyToToken[key] = token
 	}
 	if len(keys) == 0 {
 		return
@@ -385,7 +388,7 @@ func (s *ZerodhaFeedService) refreshCircuitLimits(ctx context.Context) {
 		}
 
 		for key, q := range quotes {
-			token, ok := keyToToken[key]
+			tokens, ok := keyToTokens[key]
 			if !ok {
 				continue
 			}
@@ -393,11 +396,13 @@ func (s *ZerodhaFeedService) refreshCircuitLimits(ctx context.Context) {
 				continue
 			}
 			limit := zerodhaCircuitLimit{Upper: q.UpperCircuitLimit, Lower: q.LowerCircuitLimit}
-			s.setCircuitLimit(token, limit)
-			if s.redisCache != nil {
-				s.redisCache.SetZerodhaCircuit(ctx, token, limit)
+			for _, token := range tokens {
+				s.setCircuitLimit(token, limit)
+				if s.redisCache != nil {
+					s.redisCache.SetZerodhaCircuit(ctx, token, limit)
+				}
+				updated++
 			}
-			updated++
 		}
 
 		if end < len(keys) {
@@ -418,6 +423,8 @@ func quoteExchangeFromFeedExchange(exchange string) string {
 	switch strings.ToUpper(strings.TrimSpace(exchange)) {
 	case "NSE-EQU", "NSE":
 		return "NSE"
+	case "CE-PE":
+		return "NFO"
 	case "MCX-MINI", "MCX":
 		return "MCX"
 	case "CDS":
@@ -427,6 +434,54 @@ func quoteExchangeFromFeedExchange(exchange string) string {
 	default:
 		return strings.ToUpper(strings.TrimSpace(exchange))
 	}
+}
+
+func quoteKeysForInstrument(meta instrumentMeta) []string {
+	symbol := strings.ToUpper(strings.TrimSpace(meta.Symbol))
+	if symbol == "" {
+		return nil
+	}
+
+	keys := make([]string, 0, 3)
+	seen := make(map[string]struct{}, 3)
+	add := func(exchange string) {
+		ex := strings.ToUpper(strings.TrimSpace(exchange))
+		if ex == "" {
+			return
+		}
+		key := ex + ":" + symbol
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+
+	segment := strings.ToUpper(strings.TrimSpace(meta.Segment))
+	switch segment {
+	case models.InstrumentSegmentNFOFut, models.InstrumentSegmentNFOOpt:
+		add("NFO")
+	case models.InstrumentSegmentMCXFut:
+		add("MCX")
+	case models.InstrumentSegmentCDSFut:
+		add("CDS")
+	case models.InstrumentSegmentEquity:
+		if strings.EqualFold(meta.Exchange, "BSE") {
+			add("BSE")
+		} else {
+			add("NSE")
+		}
+	}
+
+	// Fallback from exchange mapping.
+	add(quoteExchangeFromFeedExchange(meta.Exchange))
+
+	// Heuristic fallback: derivative symbols typically live on NFO.
+	if strings.Contains(symbol, "FUT") || strings.HasSuffix(symbol, "CE") || strings.HasSuffix(symbol, "PE") {
+		add("NFO")
+	}
+
+	return keys
 }
 
 func (s *ZerodhaFeedService) setCircuitLimit(token int64, limit zerodhaCircuitLimit) {
@@ -1247,9 +1302,11 @@ func (s *ZerodhaFeedService) seedRegistryFromDatabase() {
 
 		// Always use modeFull for all instruments to get bid/ask data
 		mode := modeFull
+		segment := strings.ToUpper(strings.TrimSpace(instrument.Segment))
 		s.registry.Add(instrument.InstrumentToken, instrumentMeta{
 			Mode:        mode,
 			Exchange:    exchange,
+			Segment:     segment,
 			Symbol:      symbol,
 			Expiry:      instrument.Expiry,
 			StrikePrice: instrument.Strike,
@@ -1284,10 +1341,12 @@ func (s *ZerodhaFeedService) RefreshFromDatabase(ctx context.Context) error {
 		if symbol == "" {
 			symbol = strconv.FormatInt(instrument.InstrumentToken, 10)
 		}
+		segment := strings.ToUpper(strings.TrimSpace(instrument.Segment))
 
 		desired[instrument.InstrumentToken] = instrumentMeta{
 			Mode:        modeFull,
 			Exchange:    exchange,
+			Segment:     segment,
 			Symbol:      symbol,
 			Expiry:      instrument.Expiry,
 			StrikePrice: instrument.Strike,
