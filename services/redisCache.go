@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,9 +14,10 @@ import (
 const tickCacheTTL = 24 * time.Hour
 
 const (
-	ZerodhaTickPrefix   = "feed:zerodha:tick:"
-	GlobalTickPrefix    = "feed:global:tick:"
-	GlobalSymbolListKey = "feed:global:symbols"
+	ZerodhaTickPrefix    = "feed:zerodha:tick:"
+	ZerodhaCircuitPrefix = "feed:zerodha:circuit:"
+	GlobalTickPrefix     = "feed:global:tick:"
+	GlobalSymbolListKey  = "feed:global:symbols"
 )
 
 // RedisTickCache caches NormalizedTick values in Redis per symbol.
@@ -133,4 +135,39 @@ func (c *RedisTickCache) GetSymbolList(ctx context.Context, key string) []string
 		return nil
 	}
 	return symbols
+}
+
+// SetZerodhaCircuit stores upper/lower circuit by instrument token.
+func (c *RedisTickCache) SetZerodhaCircuit(ctx context.Context, token int64, limit zerodhaCircuitLimit) {
+	if c == nil || c.client == nil || token <= 0 {
+		return
+	}
+	key := ZerodhaCircuitPrefix + strconv.FormatInt(token, 10)
+	data, err := json.Marshal(limit)
+	if err != nil {
+		return
+	}
+	if err := c.client.Set(ctx, key, data, tickCacheTTL).Err(); err != nil {
+		log.Printf("redis circuit set error: key=%s err=%v", key, err)
+	}
+}
+
+// GetZerodhaCircuit reads upper/lower circuit by instrument token.
+func (c *RedisTickCache) GetZerodhaCircuit(ctx context.Context, token int64) (zerodhaCircuitLimit, bool) {
+	if c == nil || c.client == nil || token <= 0 {
+		return zerodhaCircuitLimit{}, false
+	}
+	key := ZerodhaCircuitPrefix + strconv.FormatInt(token, 10)
+	value, err := c.client.Get(ctx, key).Result()
+	if err != nil {
+		return zerodhaCircuitLimit{}, false
+	}
+	var limit zerodhaCircuitLimit
+	if err := json.Unmarshal([]byte(value), &limit); err != nil {
+		return zerodhaCircuitLimit{}, false
+	}
+	if limit.Upper <= 0 || limit.Lower <= 0 {
+		return zerodhaCircuitLimit{}, false
+	}
+	return limit, true
 }

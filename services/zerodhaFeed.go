@@ -229,6 +229,7 @@ func NewZerodhaFeedService(cfg config.ZerodhaConfig, db *gorm.DB, tickHub *TickH
 	}
 	service.seedRegistryFromDatabase()
 	service.loadAccessTokenFromDatabase()
+	service.hydrateCircuitCacheFromRedis()
 	if redisCache != nil {
 		ticks := redisCache.Snapshot(context.Background(), ZerodhaTickPrefix, "")
 		for _, tick := range ticks {
@@ -239,6 +240,27 @@ func NewZerodhaFeedService(cfg config.ZerodhaConfig, db *gorm.DB, tickHub *TickH
 		}
 	}
 	return service
+}
+
+func (s *ZerodhaFeedService) hydrateCircuitCacheFromRedis() {
+	if s.redisCache == nil {
+		return
+	}
+	tokens := s.registry.SnapshotTokens()
+	if len(tokens) == 0 {
+		return
+	}
+	ctx := context.Background()
+	loaded := 0
+	for _, token := range tokens {
+		if limit, ok := s.redisCache.GetZerodhaCircuit(ctx, token); ok {
+			s.setCircuitLimit(token, limit)
+			loaded++
+		}
+	}
+	if loaded > 0 {
+		log.Printf("zerodha circuit cache loaded from redis: %d symbols", loaded)
+	}
 }
 
 func (s *ZerodhaFeedService) Start(ctx context.Context) {
@@ -370,7 +392,11 @@ func (s *ZerodhaFeedService) refreshCircuitLimits(ctx context.Context) {
 			if q.UpperCircuitLimit <= 0 || q.LowerCircuitLimit <= 0 {
 				continue
 			}
-			s.setCircuitLimit(token, zerodhaCircuitLimit{Upper: q.UpperCircuitLimit, Lower: q.LowerCircuitLimit})
+			limit := zerodhaCircuitLimit{Upper: q.UpperCircuitLimit, Lower: q.LowerCircuitLimit}
+			s.setCircuitLimit(token, limit)
+			if s.redisCache != nil {
+				s.redisCache.SetZerodhaCircuit(ctx, token, limit)
+			}
 			updated++
 		}
 
@@ -1067,6 +1093,16 @@ func (s *ZerodhaFeedService) normalizePacket(packet []byte) (NormalizedTick, err
 	if circuit, ok := s.getCircuitLimit(token); ok {
 		tick.UpperCircuit = circuit.Upper
 		tick.LowerCircuit = circuit.Lower
+	} else if s.redisCache != nil {
+		cacheCtx := context.Background()
+		if s.baseCtx != nil {
+			cacheCtx = s.baseCtx
+		}
+		if circuit, found := s.redisCache.GetZerodhaCircuit(cacheCtx, token); found {
+			s.setCircuitLimit(token, circuit)
+			tick.UpperCircuit = circuit.Upper
+			tick.LowerCircuit = circuit.Lower
+		}
 	}
 
 	packetLen := len(packet)
