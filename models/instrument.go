@@ -146,6 +146,45 @@ type InstrumentListFilters struct {
 	Status         string
 	ExpiryDate     string
 	Search         string
+	SortBy         string
+	SortOrder      string
+}
+
+var allowedInstrumentSortColumns = map[string]string{
+	"id":               "id",
+	"instrument_token": "instrument_token",
+	"exchange_token":   "exchange_token",
+	"trading_symbol":   "trading_symbol",
+	"tradingsymbol":    "trading_symbol",
+	"name":             "name",
+	"last_price":       "last_price",
+	"expiry":           "expiry",
+	"strike":           "strike",
+	"tick_size":        "tick_size",
+	"lot_size":         "lot_size",
+	"instrument_type":  "instrument_type",
+	"segment":          "segment",
+	"exchange":         "exchange",
+	"status":           "status",
+	"is_deleted":       "is_deleted",
+	"created_at":       "created_at",
+	"updated_at":       "updated_at",
+}
+
+func buildInstrumentSortClause(filters InstrumentListFilters) string {
+	column := "created_at"
+	if raw := strings.ToLower(strings.TrimSpace(filters.SortBy)); raw != "" {
+		if mapped, ok := allowedInstrumentSortColumns[raw]; ok {
+			column = mapped
+		}
+	}
+
+	direction := "DESC"
+	if strings.EqualFold(strings.TrimSpace(filters.SortOrder), "asc") {
+		direction = "ASC"
+	}
+
+	return column + " " + direction
 }
 
 func parseCSVInt64(value string) (int64, error) {
@@ -460,6 +499,7 @@ func GetInstrumentByIDIncludingDeleted(db *gorm.DB, id string) (*Instrument, err
 
 func GetInstrumentsPaginated(db *gorm.DB, page, limit int, includeDeleted bool, filters InstrumentListFilters) ([]Instrument, int64, error) {
 	query := db.Model(&Instrument{})
+	sortClause := buildInstrumentSortClause(filters)
 	if !includeDeleted {
 		query = query.Where("is_deleted = ?", false)
 	}
@@ -502,7 +542,7 @@ func GetInstrumentsPaginated(db *gorm.DB, page, limit int, includeDeleted bool, 
 
 	var instruments []Instrument
 	offset := (page - 1) * limit
-	err := query.Order("created_at DESC").Offset(offset).Limit(limit).Find(&instruments).Error
+	err := query.Order(sortClause).Offset(offset).Limit(limit).Find(&instruments).Error
 	return instruments, total, err
 }
 

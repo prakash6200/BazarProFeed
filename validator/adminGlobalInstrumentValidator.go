@@ -80,6 +80,32 @@ type GlobalInstrumentListQueryRequest struct {
 	InstrumentType string
 	Expiry         string
 	Search         string
+	SortBy         string
+	SortOrder      string
+}
+
+var allowedGlobalSortFields = map[string]struct{}{
+	"id":                    {},
+	"instrument_token":      {},
+	"exchange_token":        {},
+	"trading_symbol":        {},
+	"tradingsymbol":         {},
+	"name":                  {},
+	"subscribe_symbol_name": {},
+	"symbol":                {},
+	"last_price":            {},
+	"expiry":                {},
+	"tick_size":             {},
+	"lot_size":              {},
+	"instrument_type":       {},
+	"segment":               {},
+	"exchange":              {},
+	"strike":                {},
+	"status":                {},
+	"is_deleted":            {},
+	"created_at":            {},
+	"updated_at":            {},
+	"deleted_at":            {},
 }
 
 func ValidateListGlobalInstrumentsQuery(c *fiber.Ctx) error {
@@ -187,12 +213,34 @@ func ValidateListGlobalInstrumentsQuery(c *fiber.Ctx) error {
 		}
 	}
 	search := strings.TrimSpace(c.Query("search"))
+	sortBy := strings.ToLower(strings.TrimSpace(c.Query("sort_by")))
+	sortOrder := strings.ToLower(strings.TrimSpace(c.Query("sort_order")))
 
 	if len(search) > 100 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
 			"message":     "search must be less than or equal to 100 characters",
 			"error":       "search must be less than or equal to 100 characters",
+		})
+	}
+
+	if sortBy != "" {
+		if _, ok := allowedGlobalSortFields[sortBy]; !ok {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "sort_by is invalid",
+				"error":       "sort_by is invalid",
+			})
+		}
+	}
+
+	if sortOrder == "" {
+		sortOrder = "desc"
+	} else if sortOrder != "asc" && sortOrder != "desc" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "sort_order must be asc or desc",
+			"error":       "sort_order must be asc or desc",
 		})
 	}
 
@@ -206,6 +254,8 @@ func ValidateListGlobalInstrumentsQuery(c *fiber.Ctx) error {
 		InstrumentType: instrumentType,
 		Expiry:         expiry,
 		Search:         search,
+		SortBy:         sortBy,
+		SortOrder:      sortOrder,
 	})
 
 	return c.Next()

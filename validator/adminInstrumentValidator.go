@@ -61,6 +61,29 @@ type InstrumentListQueryRequest struct {
 	Status         string
 	ExpiryDate     string
 	Search         string
+	SortBy         string
+	SortOrder      string
+}
+
+var allowedInstrumentSortFields = map[string]struct{}{
+	"id":               {},
+	"instrument_token": {},
+	"exchange_token":   {},
+	"trading_symbol":   {},
+	"tradingsymbol":    {},
+	"name":             {},
+	"last_price":       {},
+	"expiry":           {},
+	"strike":           {},
+	"tick_size":        {},
+	"lot_size":         {},
+	"instrument_type":  {},
+	"segment":          {},
+	"exchange":         {},
+	"status":           {},
+	"is_deleted":       {},
+	"created_at":       {},
+	"updated_at":       {},
 }
 
 var instrumentIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
@@ -436,6 +459,8 @@ func ValidateListInstrumentsQuery(c *fiber.Ctx) error {
 	status := strings.ToUpper(strings.TrimSpace(c.Query("status")))
 	expiry := strings.TrimSpace(c.Query("expiry"))
 	search := strings.TrimSpace(c.Query("search"))
+	sortBy := strings.ToLower(strings.TrimSpace(c.Query("sort_by")))
+	sortOrder := strings.ToLower(strings.TrimSpace(c.Query("sort_order")))
 
 	if instrumentType != "" && !isAllowedEnumValue(instrumentType, allowedInstrumentTypes) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -469,6 +494,26 @@ func ValidateListInstrumentsQuery(c *fiber.Ctx) error {
 		})
 	}
 
+	if sortBy != "" {
+		if _, ok := allowedInstrumentSortFields[sortBy]; !ok {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "sort_by is invalid",
+				"error":       "sort_by is invalid",
+			})
+		}
+	}
+
+	if sortOrder == "" {
+		sortOrder = "desc"
+	} else if sortOrder != "asc" && sortOrder != "desc" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "sort_order must be asc or desc",
+			"error":       "sort_order must be asc or desc",
+		})
+	}
+
 	expiryDate := ""
 	if expiry != "" {
 		parsedExpiry, err := time.Parse("02-01-06", expiry)
@@ -492,6 +537,8 @@ func ValidateListInstrumentsQuery(c *fiber.Ctx) error {
 		Status:         status,
 		ExpiryDate:     expiryDate,
 		Search:         search,
+		SortBy:         sortBy,
+		SortOrder:      sortOrder,
 	})
 
 	return c.Next()

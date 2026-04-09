@@ -144,6 +144,8 @@ func (ic *AdminInstrumentController) GetInstruments(c *fiber.Ctx) error {
 		Status:         query.Status,
 		ExpiryDate:     query.ExpiryDate,
 		Search:         query.Search,
+		SortBy:         query.SortBy,
+		SortOrder:      query.SortOrder,
 	}
 
 	instruments, total, err := models.GetInstrumentsPaginated(ic.db, page, limit, includeDeleted, filters)
@@ -178,6 +180,8 @@ func (ic *AdminInstrumentController) GetInstruments(c *fiber.Ctx) error {
 				"status":          filters.Status,
 				"expiry":          filters.ExpiryDate,
 				"search":          filters.Search,
+				"sort_by":         filters.SortBy,
+				"sort_order":      filters.SortOrder,
 			},
 		},
 	})

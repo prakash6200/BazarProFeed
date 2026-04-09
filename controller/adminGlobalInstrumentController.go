@@ -78,6 +78,8 @@ func (ctl *AdminGlobalInstrumentController) List(c *fiber.Ctx) error {
 		InstrumentType: query.InstrumentType,
 		Expiry:         query.Expiry,
 		Search:         query.Search,
+		SortBy:         query.SortBy,
+		SortOrder:      query.SortOrder,
 	}
 
 	instruments, total, err := models.GetGlobalInstrumentsPaginated(ctl.DB, page, limit, includeDeleted, filters)
@@ -111,6 +113,8 @@ func (ctl *AdminGlobalInstrumentController) List(c *fiber.Ctx) error {
 				"instrument_type": query.InstrumentType,
 				"expiry":          query.Expiry,
 				"search":          query.Search,
+				"sort_by":         query.SortBy,
+				"sort_order":      query.SortOrder,
 			},
 		},
 	})
