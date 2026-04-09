@@ -35,33 +35,48 @@ func IsGlobalMarketOpen() bool {
 }
 
 type NormalizedTick struct {
-	Exchange         string     `json:"exchange"`
-	Symbol           string     `json:"symbol"`
-	Expiry           *time.Time `json:"expiry,omitempty"`
-	StrikePrice      float64    `json:"strikePrice"`
-	LTP              float64    `json:"ltp"`
-	Open             float64    `json:"open"`
-	High             float64    `json:"high"`
-	Low              float64    `json:"low"`
-	Close            float64    `json:"close"`
-	BidPrice         float64    `json:"bidPrice"`
-	BidQty           int64      `json:"bidQty"`
-	BuyPrice         float64    `json:"buyPrice"`
-	BuyQty           int64      `json:"buyQty"`
-	AskPrice         float64    `json:"askPrice"`
-	AskQty           int64      `json:"askQty"`
-	SellPrice        float64    `json:"sellPrice"`
-	SellQty          int64      `json:"sellQty"`
-	TBQ              int64      `json:"tbq"`
-	TSQ              int64      `json:"tsq"`
-	OI               int64      `json:"oi"`
-	LowerCircuit     float64    `json:"lowerCkt"`
-	UpperCircuit     float64    `json:"upperCkt"`
-	LUT              time.Time  `json:"lut"`
-	Timestamp        time.Time  `json:"timestamp"`
-	NetChange        float64    `json:"netChange"`
-	NetChangePercent float64    `json:"netChangePercent"`
-	MarketStatus     string     `json:"market_status,omitempty"`
+	Exchange         string       `json:"exchange"`
+	Symbol           string       `json:"symbol"`
+	Expiry           *time.Time   `json:"expiry,omitempty"`
+	StrikePrice      float64      `json:"strikePrice"`
+	LTP              float64      `json:"ltp"`
+	LastTradedQty    int64        `json:"lastTradedQty"`
+	AvgPrice         float64      `json:"avgPrice"`
+	Volume           int64        `json:"volume"`
+	Open             float64      `json:"open"`
+	High             float64      `json:"high"`
+	Low              float64      `json:"low"`
+	Close            float64      `json:"close"`
+	BidPrice         float64      `json:"bidPrice"`
+	BidQty           int64        `json:"bidQty"`
+	BuyPrice         float64      `json:"buyPrice"`
+	BuyQty           int64        `json:"buyQty"`
+	AskPrice         float64      `json:"askPrice"`
+	AskQty           int64        `json:"askQty"`
+	SellPrice        float64      `json:"sellPrice"`
+	SellQty          int64        `json:"sellQty"`
+	BidDepth         []DepthLevel `json:"bidDepth,omitempty"`
+	AskDepth         []DepthLevel `json:"askDepth,omitempty"`
+	TBQ              int64        `json:"tbq"`
+	TSQ              int64        `json:"tsq"`
+	OI               int64        `json:"oi"`
+	OIDayHigh        int64        `json:"oiDayHigh"`
+	OIDayLow         int64        `json:"oiDayLow"`
+	LowerCircuit     float64      `json:"lowerCkt"`
+	UpperCircuit     float64      `json:"upperCkt"`
+	LastTradedTime   time.Time    `json:"lastTradedTime,omitempty"`
+	ExchangeTime     time.Time    `json:"exchangeTime,omitempty"`
+	LUT              time.Time    `json:"lut"`
+	Timestamp        time.Time    `json:"timestamp"`
+	NetChange        float64      `json:"netChange"`
+	NetChangePercent float64      `json:"netChangePercent"`
+	MarketStatus     string       `json:"market_status,omitempty"`
+}
+
+type DepthLevel struct {
+	Quantity int64   `json:"quantity"`
+	Price    float64 `json:"price"`
+	Orders   int64   `json:"orders"`
 }
 
 type MarketStateManager struct {

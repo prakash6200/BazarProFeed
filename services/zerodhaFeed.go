@@ -40,24 +40,34 @@ const (
 	maxReconnectBackoff = 30 * time.Second
 	spikeAlertPercent   = 20.0
 
+	zerodhaCircuitRefreshInterval = 15 * time.Minute
+	zerodhaQuoteBatchSize         = 400
+	zerodhaQuoteBatchPause        = 500 * time.Millisecond
+
 	packetMinLength     = 8
 	packetQuoteOHLCMin  = 28
 	packetQuoteOHLCMax  = 44
 	packetFullMin       = 44
-	packetFullWithOI    = 52
+	packetFullWithOI    = 64
 	packetFullWithDepth = 184
 
 	packetOffsetToken = 0
 	packetOffsetLTP   = 4
-
+	packetOffsetLTQ   = 8
+	packetOffsetAvg   = 12
+	packetOffsetVol   = 16
+	packetOffsetTBQ   = 20
+	packetOffsetTSQ   = 24
 	packetOffsetOpen  = 28
 	packetOffsetHigh  = 32
 	packetOffsetLow   = 36
 	packetOffsetClose = 40
 
-	packetOffsetTBQ = 20
-	packetOffsetTSQ = 24
-	packetOffsetOI  = 48
+	packetOffsetLastTradedTS = 44
+	packetOffsetOI           = 48
+	packetOffsetOIDayHigh    = 52
+	packetOffsetOIDayLow     = 56
+	packetOffsetExchangeTS   = 60
 
 	depthStartOffset = 64
 	depthLevelSize   = 12
@@ -79,6 +89,11 @@ type instrumentMeta struct {
 	Symbol      string
 	Expiry      *time.Time
 	StrikePrice float64
+}
+
+type zerodhaCircuitLimit struct {
+	Upper float64
+	Lower float64
 }
 
 type kiteErrorResponse struct {
@@ -194,19 +209,23 @@ type ZerodhaFeedService struct {
 
 	writeMu sync.Mutex
 
+	circuitMu      sync.RWMutex
+	circuitByToken map[int64]zerodhaCircuitLimit
+
 	lastInboundTickAt atomic.Int64
 }
 
 func NewZerodhaFeedService(cfg config.ZerodhaConfig, db *gorm.DB, tickHub *TickHub, redisCache *RedisTickCache) *ZerodhaFeedService {
 	service := &ZerodhaFeedService{
-		cfg:         cfg,
-		db:          db,
-		tickHub:     tickHub,
-		marketState: NewMarketStateManager(),
-		registry:    newSubscriptionRegistry(),
-		httpClient:  &http.Client{Timeout: 10 * time.Second},
-		state:       connectionStateDisconnected,
-		redisCache:  redisCache,
+		cfg:            cfg,
+		db:             db,
+		tickHub:        tickHub,
+		marketState:    NewMarketStateManager(),
+		registry:       newSubscriptionRegistry(),
+		httpClient:     &http.Client{Timeout: 10 * time.Second},
+		state:          connectionStateDisconnected,
+		redisCache:     redisCache,
+		circuitByToken: make(map[int64]zerodhaCircuitLimit),
 	}
 	service.seedRegistryFromDatabase()
 	service.loadAccessTokenFromDatabase()
@@ -262,6 +281,7 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 			if exchangeErr := s.ensureAccessTokenFromRequestToken(); exchangeErr == nil {
 				if revalidateErr := s.validateAccessToken(); revalidateErr == nil {
 					go s.rebroadcastStaleStateLoop(ctx)
+					go s.circuitLimitRefreshLoop(ctx)
 					go s.runReconnectLoop(ctx)
 					return
 				}
@@ -273,7 +293,127 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 	}
 
 	go s.rebroadcastStaleStateLoop(ctx)
+	go s.circuitLimitRefreshLoop(ctx)
 	go s.runReconnectLoop(ctx)
+}
+
+func (s *ZerodhaFeedService) circuitLimitRefreshLoop(ctx context.Context) {
+	s.refreshCircuitLimits(ctx)
+
+	ticker := time.NewTicker(zerodhaCircuitRefreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.refreshCircuitLimits(ctx)
+		}
+	}
+}
+
+func (s *ZerodhaFeedService) refreshCircuitLimits(ctx context.Context) {
+	apiKey := strings.TrimSpace(s.cfg.APIKey)
+	accessToken := s.getAccessToken()
+	if apiKey == "" || accessToken == "" {
+		return
+	}
+
+	items := s.registry.SnapshotItems()
+	if len(items) == 0 {
+		return
+	}
+
+	keys := make([]string, 0, len(items))
+	keyToToken := make(map[string]int64, len(items))
+	for token, meta := range items {
+		exchange := quoteExchangeFromFeedExchange(meta.Exchange)
+		symbol := strings.TrimSpace(meta.Symbol)
+		if exchange == "" || symbol == "" {
+			continue
+		}
+		key := exchange + ":" + symbol
+		keys = append(keys, key)
+		keyToToken[key] = token
+	}
+	if len(keys) == 0 {
+		return
+	}
+
+	kc := kiteconnect.New(apiKey)
+	kc.SetAccessToken(accessToken)
+
+	updated := 0
+	for i := 0; i < len(keys); i += zerodhaQuoteBatchSize {
+		if ctx.Err() != nil {
+			return
+		}
+
+		end := i + zerodhaQuoteBatchSize
+		if end > len(keys) {
+			end = len(keys)
+		}
+
+		batch := keys[i:end]
+		quotes, err := kc.GetQuote(batch...)
+		if err != nil {
+			log.Printf("zerodha circuit refresh batch failed: start=%d end=%d err=%v", i, end, err)
+			continue
+		}
+
+		for key, q := range quotes {
+			token, ok := keyToToken[key]
+			if !ok {
+				continue
+			}
+			if q.UpperCircuitLimit <= 0 || q.LowerCircuitLimit <= 0 {
+				continue
+			}
+			s.setCircuitLimit(token, zerodhaCircuitLimit{Upper: q.UpperCircuitLimit, Lower: q.LowerCircuitLimit})
+			updated++
+		}
+
+		if end < len(keys) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(zerodhaQuoteBatchPause):
+			}
+		}
+	}
+
+	if updated > 0 {
+		log.Printf("zerodha circuit limits refreshed: %d symbols", updated)
+	}
+}
+
+func quoteExchangeFromFeedExchange(exchange string) string {
+	switch strings.ToUpper(strings.TrimSpace(exchange)) {
+	case "NSE-EQU", "NSE":
+		return "NSE"
+	case "MCX-MINI", "MCX":
+		return "MCX"
+	case "CDS":
+		return "CDS"
+	case "BSE":
+		return "BSE"
+	default:
+		return strings.ToUpper(strings.TrimSpace(exchange))
+	}
+}
+
+func (s *ZerodhaFeedService) setCircuitLimit(token int64, limit zerodhaCircuitLimit) {
+	s.circuitMu.Lock()
+	s.circuitByToken[token] = limit
+	s.circuitMu.Unlock()
+}
+
+func (s *ZerodhaFeedService) getCircuitLimit(token int64) (zerodhaCircuitLimit, bool) {
+	s.circuitMu.RLock()
+	limit, ok := s.circuitByToken[token]
+	s.circuitMu.RUnlock()
+	return limit, ok
 }
 
 func (s *ZerodhaFeedService) rebroadcastStaleStateLoop(ctx context.Context) {
@@ -924,6 +1064,10 @@ func (s *ZerodhaFeedService) normalizePacket(packet []byte) (NormalizedTick, err
 		LUT:         now,
 		Timestamp:   now,
 	}
+	if circuit, ok := s.getCircuitLimit(token); ok {
+		tick.UpperCircuit = circuit.Upper
+		tick.LowerCircuit = circuit.Lower
+	}
 
 	packetLen := len(packet)
 
@@ -935,27 +1079,61 @@ func (s *ZerodhaFeedService) normalizePacket(packet []byte) (NormalizedTick, err
 	}
 
 	if packetLen >= packetFullMin {
+		tick.LastTradedQty = int64(readUint32(packet, packetOffsetLTQ))
+		tick.AvgPrice = readPrice(packet, packetOffsetAvg)
+		tick.Volume = int64(readUint32(packet, packetOffsetVol))
 		tick.TBQ = int64(readUint32(packet, packetOffsetTBQ))
 		tick.TSQ = int64(readUint32(packet, packetOffsetTSQ))
 		tick.Open = readPrice(packet, packetOffsetOpen)
 		tick.High = readPrice(packet, packetOffsetHigh)
 		tick.Low = readPrice(packet, packetOffsetLow)
 		tick.Close = readPrice(packet, packetOffsetClose)
+		tick.LastTradedTime = readTimestamp(packet, packetOffsetLastTradedTS)
 	}
 
 	if packetLen >= packetFullWithOI {
 		tick.OI = int64(readUint32(packet, packetOffsetOI))
+		tick.OIDayHigh = int64(readUint32(packet, packetOffsetOIDayHigh))
+		tick.OIDayLow = int64(readUint32(packet, packetOffsetOIDayLow))
+		tick.ExchangeTime = readTimestamp(packet, packetOffsetExchangeTS)
 	}
 
-	if packetLen >= packetFullWithDepth && meta.Mode == modeFull {
-		if depthStartOffset+depthLevelSize <= packetLen {
-			tick.BidQty = int64(readUint32(packet, depthStartOffset))
-			tick.BidPrice = readPrice(packet, depthStartOffset+4)
+	if packetLen >= packetFullWithDepth {
+		tick.BidDepth = make([]DepthLevel, 0, depthLevels)
+		tick.AskDepth = make([]DepthLevel, 0, depthLevels)
+
+		for i := 0; i < depthLevels; i++ {
+			offset := depthStartOffset + (i * depthLevelSize)
+			if offset+depthLevelSize > packetLen {
+				break
+			}
+			tick.BidDepth = append(tick.BidDepth, DepthLevel{
+				Quantity: int64(readUint32(packet, offset)),
+				Price:    readPrice(packet, offset+4),
+				Orders:   int64(readUint16(packet, offset+8)),
+			})
 		}
+
 		askStart := depthStartOffset + (depthLevels * depthLevelSize)
-		if askStart+depthLevelSize <= packetLen {
-			tick.AskQty = int64(readUint32(packet, askStart))
-			tick.AskPrice = readPrice(packet, askStart+4)
+		for i := 0; i < depthLevels; i++ {
+			offset := askStart + (i * depthLevelSize)
+			if offset+depthLevelSize > packetLen {
+				break
+			}
+			tick.AskDepth = append(tick.AskDepth, DepthLevel{
+				Quantity: int64(readUint32(packet, offset)),
+				Price:    readPrice(packet, offset+4),
+				Orders:   int64(readUint16(packet, offset+8)),
+			})
+		}
+
+		if len(tick.BidDepth) > 0 {
+			tick.BidQty = tick.BidDepth[0].Quantity
+			tick.BidPrice = tick.BidDepth[0].Price
+		}
+		if len(tick.AskDepth) > 0 {
+			tick.AskQty = tick.AskDepth[0].Quantity
+			tick.AskPrice = tick.AskDepth[0].Price
 		}
 	}
 
@@ -976,11 +1154,29 @@ func readUint32(packet []byte, offset int) uint32 {
 	return binary.BigEndian.Uint32(packet[offset : offset+4])
 }
 
+func readUint16(packet []byte, offset int) uint16 {
+	if offset+2 > len(packet) {
+		return 0
+	}
+	return binary.BigEndian.Uint16(packet[offset : offset+2])
+}
+
 func readPrice(packet []byte, offset int) float64 {
 	if offset+4 > len(packet) {
 		return 0
 	}
 	return float64(int32(binary.BigEndian.Uint32(packet[offset:offset+4]))) / 100.0
+}
+
+func readTimestamp(packet []byte, offset int) time.Time {
+	if offset+4 > len(packet) {
+		return time.Time{}
+	}
+	epoch := int64(binary.BigEndian.Uint32(packet[offset : offset+4]))
+	if epoch == 0 {
+		return time.Time{}
+	}
+	return time.Unix(epoch, 0).UTC()
 }
 
 func (s *ZerodhaFeedService) seedRegistryFromDatabase() {
