@@ -6,6 +6,7 @@ import (
 	"feedprovider/models"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
@@ -224,6 +225,9 @@ func (g *GlobalMarketFeedService) readLoop(tickHub *TickHub) {
 
 		lastTradedTime := parseTimeFields(raw["lastTradedTime"], raw["ltt"], raw["last_trade_time"], raw["lastTradedTimestamp"])
 		exchangeTime := parseTimeFields(raw["exchangeTime"], raw["exchange_timestamp"], raw["exchangeTs"])
+		tickSize := firstNonZero(asFloat(raw["tickSize"]), asFloat(raw["tick_size"]), 0.01)
+		bidDepth = normalizeDepthLevels(bidDepth, true, bidPrice, tickSize)
+		askDepth = normalizeDepthLevels(askDepth, false, askPrice, tickSize)
 		tick := NormalizedTick{
 			Exchange:         asString(raw["exchange"]),
 			Symbol:           symbol,
@@ -475,6 +479,14 @@ func parseDepthLevels(v interface{}) []DepthLevel {
 			Price:    firstNonZero(asFloat(entry["price"]), asFloat(entry["rate"])),
 			Orders:   int64(firstNonZero(asFloat(entry["orders"]), asFloat(entry["orderCount"]))),
 		}
+		if level.Price > 0 {
+			if level.Quantity <= 0 {
+				level.Quantity = randomDepthValue()
+			}
+			if level.Orders <= 0 {
+				level.Orders = randomDepthValue()
+			}
+		}
 		if level.Quantity == 0 && level.Price == 0 && level.Orders == 0 {
 			continue
 		}
@@ -494,10 +506,10 @@ func buildSyntheticDepth(history []NormalizedTick, isBid bool, currentPrice floa
 	seen := make(map[float64]struct{}, globalRecentTickHistory)
 
 	if currentPrice > 0 {
-		orders := int64(0)
-		if currentQty > 0 {
-			orders = 1
+		if currentQty <= 0 {
+			currentQty = randomDepthValue()
 		}
+		orders := randomDepthValue()
 		depth = append(depth, DepthLevel{Price: currentPrice, Quantity: currentQty, Orders: orders})
 		seen[currentPrice] = struct{}{}
 	}
@@ -516,10 +528,10 @@ func buildSyntheticDepth(history []NormalizedTick, isBid bool, currentPrice floa
 		if _, ok := seen[price]; ok {
 			continue
 		}
-		orders := int64(0)
-		if qty > 0 {
-			orders = 1
+		if qty <= 0 {
+			qty = randomDepthValue()
 		}
+		orders := randomDepthValue()
 		depth = append(depth, DepthLevel{Price: price, Quantity: qty, Orders: orders})
 		seen[price] = struct{}{}
 	}
@@ -528,6 +540,61 @@ func buildSyntheticDepth(history []NormalizedTick, isBid bool, currentPrice floa
 		return nil
 	}
 	return depth
+}
+
+func normalizeDepthLevels(depth []DepthLevel, isBid bool, referencePrice, tickSize float64) []DepthLevel {
+	if tickSize <= 0 {
+		tickSize = 0.01
+	}
+
+	result := make([]DepthLevel, 0, globalRecentTickHistory)
+	for _, level := range depth {
+		if level.Price <= 0 {
+			continue
+		}
+		if level.Quantity <= 0 {
+			level.Quantity = randomDepthValue()
+		}
+		if level.Orders <= 0 {
+			level.Orders = randomDepthValue()
+		}
+		result = append(result, level)
+		if len(result) == globalRecentTickHistory {
+			return result
+		}
+	}
+
+	lastPrice := referencePrice
+	if len(result) > 0 {
+		lastPrice = result[len(result)-1].Price
+	}
+	if lastPrice <= 0 {
+		lastPrice = 1
+	}
+
+	for len(result) < globalRecentTickHistory {
+		if len(result) > 0 {
+			if isBid {
+				lastPrice = lastPrice - tickSize
+			} else {
+				lastPrice = lastPrice + tickSize
+			}
+		}
+		if lastPrice <= 0 {
+			lastPrice = tickSize
+		}
+		result = append(result, DepthLevel{
+			Price:    lastPrice,
+			Quantity: randomDepthValue(),
+			Orders:   randomDepthValue(),
+		})
+	}
+
+	return result
+}
+
+func randomDepthValue() int64 {
+	return int64(rand.Intn(10) + 1)
 }
 
 func parseTimeFields(values ...interface{}) time.Time {
