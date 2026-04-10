@@ -22,7 +22,7 @@ import (
 const (
 	socketPingPeriod     = 25 * time.Second
 	socketWriteWait      = 10 * time.Second
-	socketMaxBulkFilters = 100
+	socketMaxBulkFilters = 1000
 )
 
 type socketClient struct {
@@ -511,7 +511,7 @@ func (h *SocketHub) resolveBulkFilterSymbols(rawSymbols, rawTokens string) ([]st
 	}
 
 	if len(rawSymbolItems)+len(rawTokenItems) > socketMaxBulkFilters {
-		return nil, errors.New("too many bulk filters requested")
+		return nil, errors.New("too many bulk filters requested, max " + strconv.Itoa(socketMaxBulkFilters))
 	}
 
 	set := make(map[string]struct{})
