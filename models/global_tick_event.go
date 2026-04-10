@@ -39,8 +39,10 @@ type GlobalCandleTicksRow struct {
 }
 
 type GlobalTickQueryFilters struct {
-	Exchange string
-	Symbol   string
+	Exchange      string
+	Symbol        string
+	IntervalStart *time.Time
+	IntervalEnd   *time.Time
 }
 
 func CreateGlobalTickEvent(db *gorm.DB, exchange, symbol string, ltp float64, tickTime time.Time, payload []byte) error {
@@ -138,6 +140,14 @@ func ListGlobalCandlesLast24h(db *gorm.DB, intervalMinutes, page, sizePerPage in
 		whereSQL += " AND symbol = ?"
 		args = append(args, strings.ToUpper(strings.TrimSpace(filters.Symbol)))
 	}
+	if filters.IntervalStart != nil {
+		whereSQL += " AND (CASE WHEN tick_time IS NULL OR tick_time <= '1970-01-01'::timestamp THEN created_at ELSE tick_time END) >= ?"
+		args = append(args, filters.IntervalStart.UTC())
+	}
+	if filters.IntervalEnd != nil {
+		whereSQL += " AND (CASE WHEN tick_time IS NULL OR tick_time <= '1970-01-01'::timestamp THEN created_at ELSE tick_time END) < ?"
+		args = append(args, filters.IntervalEnd.UTC())
+	}
 
 	bucketExpr := "date_trunc('hour', tick_ts) + floor(date_part('minute', tick_ts) / ?) * make_interval(mins => ?)"
 
@@ -229,6 +239,14 @@ func ListGlobalCandleTicksLast24h(db *gorm.DB, intervalMinutes, page, sizePerPag
 	if strings.TrimSpace(filters.Symbol) != "" {
 		whereSQL += " AND symbol = ?"
 		args = append(args, strings.ToUpper(strings.TrimSpace(filters.Symbol)))
+	}
+	if filters.IntervalStart != nil {
+		whereSQL += " AND (CASE WHEN tick_time IS NULL OR tick_time <= '1970-01-01'::timestamp THEN created_at ELSE tick_time END) >= ?"
+		args = append(args, filters.IntervalStart.UTC())
+	}
+	if filters.IntervalEnd != nil {
+		whereSQL += " AND (CASE WHEN tick_time IS NULL OR tick_time <= '1970-01-01'::timestamp THEN created_at ELSE tick_time END) < ?"
+		args = append(args, filters.IntervalEnd.UTC())
 	}
 
 	bucketExpr := "date_trunc('hour', tick_ts) + floor(date_part('minute', tick_ts) / ?) * make_interval(mins => ?)"

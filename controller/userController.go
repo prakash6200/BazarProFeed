@@ -8,6 +8,7 @@ import (
 	"feedprovider/validator"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
@@ -27,11 +28,12 @@ type GlobalCandlesRequest struct {
 }
 
 type GlobalRawTicksRequest struct {
-	Exchange    string `json:"exchange"`
-	Symbol      string `json:"symbol"`
-	Interval    string `json:"interval"`
-	Page        int    `json:"page"`
-	SizePerPage int    `json:"sizePerPage"`
+	Exchange      string `json:"exchange"`
+	Symbol        string `json:"symbol"`
+	Interval      string `json:"interval"`
+	IntervalStart string `json:"interval_start"`
+	Page          int    `json:"page"`
+	SizePerPage   int    `json:"sizePerPage"`
 }
 
 type ZerodhaCandlesRequest struct {
@@ -43,11 +45,12 @@ type ZerodhaCandlesRequest struct {
 }
 
 type ZerodhaRawTicksRequest struct {
-	Exchange    string `json:"exchange"`
-	Symbol      string `json:"symbol"`
-	Interval    string `json:"interval"`
-	Page        int    `json:"page"`
-	SizePerPage int    `json:"sizePerPage"`
+	Exchange      string `json:"exchange"`
+	Symbol        string `json:"symbol"`
+	Interval      string `json:"interval"`
+	IntervalStart string `json:"interval_start"`
+	Page          int    `json:"page"`
+	SizePerPage   int    `json:"sizePerPage"`
 }
 
 func NewUserController(db *gorm.DB, socketHub *config.SocketHub) *UserController {
@@ -268,15 +271,19 @@ func (uc *UserController) GetGlobalCandles(c *fiber.Ctx) error {
 	case "", "1m":
 		interval = "1m"
 		intervalMinutes = 1
+	case "3m":
+		intervalMinutes = 3
 	case "5m":
 		intervalMinutes = 5
 	case "15m":
 		intervalMinutes = 15
+	case "30m":
+		intervalMinutes = 30
 	default:
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
-			"message":     "interval must be one of: 1m, 5m, 15m",
-			"error":       "interval must be one of: 1m, 5m, 15m",
+			"message":     "interval must be one of: 1m, 3m, 5m, 15m, 30m",
+			"error":       "interval must be one of: 1m, 3m, 5m, 15m, 30m",
 		})
 	}
 
@@ -343,35 +350,58 @@ func (uc *UserController) GetGlobalRawTicks(c *fiber.Ctx) error {
 	case "", "1m":
 		interval = "1m"
 		intervalMinutes = 1
+	case "3m":
+		intervalMinutes = 3
 	case "5m":
 		intervalMinutes = 5
 	case "15m":
 		intervalMinutes = 15
+	case "30m":
+		intervalMinutes = 30
 	default:
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
-			"message":     "interval must be one of: 1m, 5m, 15m",
-			"error":       "interval must be one of: 1m, 5m, 15m",
+			"message":     "interval must be one of: 1m, 3m, 5m, 15m, 30m",
+			"error":       "interval must be one of: 1m, 3m, 5m, 15m, 30m",
 		})
 	}
 
-	if req.Page <= 0 {
-		req.Page = 1
-	}
-	if req.SizePerPage <= 0 {
-		req.SizePerPage = 50
-	}
-	if req.SizePerPage > 500 {
+	req.Exchange = strings.TrimSpace(req.Exchange)
+	req.Symbol = strings.TrimSpace(req.Symbol)
+	req.IntervalStart = strings.TrimSpace(req.IntervalStart)
+
+	if req.Exchange == "" || req.Symbol == "" || req.IntervalStart == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
-			"message":     "sizePerPage must be less than or equal to 500",
-			"error":       "sizePerPage must be less than or equal to 500",
+			"message":     "exchange, symbol and interval_start are required to fetch one candle ticks",
+			"error":       "exchange, symbol and interval_start are required to fetch one candle ticks",
 		})
 	}
 
+	// Always fetch exactly one candle bucket for this API.
+	req.Page = 1
+	req.SizePerPage = 1
+
+	var intervalStartPtr *time.Time
+	var intervalEndPtr *time.Time
+	parsed, err := time.Parse(time.RFC3339, req.IntervalStart)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "interval_start must be RFC3339 format",
+			"error":       "interval_start must be RFC3339 format",
+		})
+	}
+	start := parsed.UTC()
+	end := start.Add(time.Duration(intervalMinutes) * time.Minute)
+	intervalStartPtr = &start
+	intervalEndPtr = &end
+
 	candleTicks, total, err := models.ListGlobalCandleTicksLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.GlobalTickQueryFilters{
-		Exchange: req.Exchange,
-		Symbol:   req.Symbol,
+		Exchange:      req.Exchange,
+		Symbol:        req.Symbol,
+		IntervalStart: intervalStartPtr,
+		IntervalEnd:   intervalEndPtr,
 	})
 	if err != nil {
 		log.Printf("error fetching global candle ticks: %v", err)
@@ -382,20 +412,17 @@ func (uc *UserController) GetGlobalRawTicks(c *fiber.Ctx) error {
 		})
 	}
 
-	totalPages := 0
-	if total > 0 {
-		totalPages = int((total + int64(req.SizePerPage) - 1) / int64(req.SizePerPage))
+	var candleTick interface{}
+	if len(candleTicks) > 0 {
+		candleTick = candleTicks[0]
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"status_code":  fiber.StatusOK,
-		"message":      "global candle ticks fetched successfully",
-		"candle_ticks": candleTicks,
-		"pagination": fiber.Map{
-			"page":         req.Page,
-			"sizePerPage":  req.SizePerPage,
+		"status_code": fiber.StatusOK,
+		"message":     "global selected candle ticks fetched successfully",
+		"candle_tick": candleTick,
+		"meta": fiber.Map{
 			"totalRecords": total,
-			"totalPages":   totalPages,
 			"interval":     interval,
 			"duration":     "24h",
 		},
@@ -418,15 +445,19 @@ func (uc *UserController) GetZerodhaCandles(c *fiber.Ctx) error {
 	case "", "1m":
 		interval = "1m"
 		intervalMinutes = 1
+	case "3m":
+		intervalMinutes = 3
 	case "5m":
 		intervalMinutes = 5
 	case "15m":
 		intervalMinutes = 15
+	case "30m":
+		intervalMinutes = 30
 	default:
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
-			"message":     "interval must be one of: 1m, 5m, 15m",
-			"error":       "interval must be one of: 1m, 5m, 15m",
+			"message":     "interval must be one of: 1m, 3m, 5m, 15m, 30m",
+			"error":       "interval must be one of: 1m, 3m, 5m, 15m, 30m",
 		})
 	}
 
@@ -493,15 +524,19 @@ func (uc *UserController) GetZerodhaRawTicks(c *fiber.Ctx) error {
 	case "", "1m":
 		interval = "1m"
 		intervalMinutes = 1
+	case "3m":
+		intervalMinutes = 3
 	case "5m":
 		intervalMinutes = 5
 	case "15m":
 		intervalMinutes = 15
+	case "30m":
+		intervalMinutes = 30
 	default:
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
-			"message":     "interval must be one of: 1m, 5m, 15m",
-			"error":       "interval must be one of: 1m, 5m, 15m",
+			"message":     "interval must be one of: 1m, 3m, 5m, 15m, 30m",
+			"error":       "interval must be one of: 1m, 3m, 5m, 15m, 30m",
 		})
 	}
 
@@ -519,9 +554,28 @@ func (uc *UserController) GetZerodhaRawTicks(c *fiber.Ctx) error {
 		})
 	}
 
+	var intervalStartPtr *time.Time
+	var intervalEndPtr *time.Time
+	if strings.TrimSpace(req.IntervalStart) != "" {
+		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(req.IntervalStart))
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "interval_start must be RFC3339 format",
+				"error":       "interval_start must be RFC3339 format",
+			})
+		}
+		start := parsed.UTC()
+		end := start.Add(time.Duration(intervalMinutes) * time.Minute)
+		intervalStartPtr = &start
+		intervalEndPtr = &end
+	}
+
 	candleTicks, total, err := models.ListZerodhaCandleTicksLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.ZerodhaTickQueryFilters{
-		Exchange: req.Exchange,
-		Symbol:   req.Symbol,
+		Exchange:      req.Exchange,
+		Symbol:        req.Symbol,
+		IntervalStart: intervalStartPtr,
+		IntervalEnd:   intervalEndPtr,
 	})
 	if err != nil {
 		log.Printf("error fetching zerodha candle ticks: %v", err)

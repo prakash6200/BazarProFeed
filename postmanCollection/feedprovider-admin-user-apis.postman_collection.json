@@ -196,7 +196,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"exchange\": \"CMDTY\",\n  \"symbol\": \"XAUUSD\",\n  \"interval\": \"1m\",\n  \"page\": 1,\n  \"sizePerPage\": 50\n}"
+              "raw": "{\n  \"exchange\": \"CMDTY\",\n  \"symbol\": \"XAUUSD\",\n  \"interval\": \"1m\",\n  \"interval_start\": \"2026-04-10T16:19:00+04:00\",\n  \"page\": 1,\n  \"sizePerPage\": 50\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/global/candles",
@@ -209,7 +209,7 @@
                 "candles"
               ]
             },
-            "description": "Fetch global OHLC candles for last 24 hours from stored ticks.\nBody:\n- exchange: optional\n- symbol: optional\n- interval: 1m | 5m | 15m\n- page: positive integer\n- sizePerPage: max 200"
+            "description": "Fetch global OHLC candles for last 24 hours from stored ticks.\nBody:\n- exchange: optional\n- symbol: optional\n- interval: 1m | 3m | 5m | 15m | 30m\n- page: positive integer\n- sizePerPage: max 200"
           },
           "response": []
         },
@@ -229,7 +229,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"exchange\": \"CMDTY\",\n  \"symbol\": \"XAUUSD\",\n  \"interval\": \"1m\",\n  \"page\": 1,\n  \"sizePerPage\": 50\n}"
+              "raw": "{\n  \"exchange\": \"CMDTY\",\n  \"symbol\": \"XAUUSD\",\n  \"interval\": \"1m\",\n  \"interval_start\": \"2026-04-10T16:19:00+04:00\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/global/ticks",
@@ -242,7 +242,7 @@
                 "ticks"
               ]
             },
-            "description": "Fetch candle-wise tick list for last 24 hours from stored ticks.\nBody:\n- exchange: optional\n- symbol: optional\n- interval: 1m | 5m | 15m\n- page: positive integer\n- sizePerPage: max 500\nResponse returns candle_ticks[], where each candle includes all ticks in that interval bucket."
+            "description": "Fetch all raw ticks for one selected candle from last 24 hours.\nBody:\n- exchange: required\n- symbol: required\n- interval: 1m | 3m | 5m | 15m | 30m\n- interval_start: required RFC3339 (use interval_start from first candle API response)\nResponse returns candle_tick (single object) with all ticks for that candle bucket."
           },
           "response": []
         },
@@ -262,7 +262,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"exchange\": \"NSE\",\n  \"symbol\": \"NIFTY\",\n  \"interval\": \"1m\",\n  \"page\": 1,\n  \"sizePerPage\": 50\n}"
+              "raw": "{\n  \"exchange\": \"NSE\",\n  \"symbol\": \"NIFTY\",\n  \"interval\": \"1m\",\n  \"interval_start\": \"2026-04-10T16:19:00+04:00\",\n  \"page\": 1,\n  \"sizePerPage\": 50\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/zerodha/candles",
@@ -275,7 +275,7 @@
                 "candles"
               ]
             },
-            "description": "Fetch Zerodha OHLC candles for last 24 hours from stored ticks.\nBody:\n- exchange: optional\n- symbol: optional\n- interval: 1m | 5m | 15m\n- page: positive integer\n- sizePerPage: max 200"
+            "description": "Fetch Zerodha OHLC candles for last 24 hours from stored ticks.\nBody:\n- exchange: optional\n- symbol: optional\n- interval: 1m | 3m | 5m | 15m | 30m\n- page: positive integer\n- sizePerPage: max 200"
           },
           "response": []
         },
@@ -308,7 +308,7 @@
                 "ticks"
               ]
             },
-            "description": "Fetch Zerodha candle-wise tick list for last 24 hours from stored ticks.\nBody:\n- exchange: optional\n- symbol: optional\n- interval: 1m | 5m | 15m\n- page: positive integer\n- sizePerPage: max 500\nResponse returns candle_ticks[], where each candle includes all ticks in that interval bucket."
+            "description": "Fetch Zerodha candle-wise tick list for last 24 hours from stored ticks.\nBody:\n- exchange: optional\n- symbol: optional\n- interval: 1m | 3m | 5m | 15m | 30m\n- interval_start: optional RFC3339 (example: 2026-04-10T16:19:00+04:00). If provided with symbol/exchange, API returns ticks for that one candle bucket.\n- page: positive integer\n- sizePerPage: max 500\nResponse returns candle_ticks[], where each candle includes all ticks in that interval bucket."
           },
           "response": []
         }
@@ -1064,12 +1064,12 @@
     },
     {
       "key": "username",
-      "value": "postman_user",
+      "value": "superadmin@gmail.com",
       "type": "string"
     },
     {
       "key": "password",
-      "value": "postman123",
+      "value": "Super@123",
       "type": "string"
     },
     {
