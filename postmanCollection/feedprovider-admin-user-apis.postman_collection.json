@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "b9a3c6de-8f62-4d1b-9d6d-5df7f1b3f9a1",
     "name": "FeedProvider Admin & User APIs",
-    "description": "Postman collection for current FeedProvider APIs.\n\nAuth flow:\n1) /auth/signup (optional)\n2) /auth/login to get jwt_token and api_token\n3) Use Authorization: Bearer <jwt_token> for /api and /admin routes\n\nWebSocket Feed:\n- URL: ws://localhost:8081/feed?token={{jwt_token}}\n\nZerodha session flow (admin):\n1) Login as admin and get jwt_token\n2) Obtain fresh request_token from Zerodha login (single-use, short-lived)\n3) Call POST /admin/zerodha/session with request_token (send token only, not callback URL)\n4) Access token is stored in DB and feed service uses latest active token\n5) Check status using GET /admin/zerodha/session/status",
+    "description": "Postman collection for current FeedProvider APIs.\n\nAuth flow:\n1) /auth/signup (optional)\n2) /auth/login to get jwt_token and api_token\n3) Use Authorization: Bearer <jwt_token> for /api and /admin routes\n\nAdmin access model:\n- SUPER_ADMIN can access all admin APIs\n- ADMIN access is permission-based\n- Every admin/super-admin API call is audited in server logs/table\n\nWebSocket Feed:\n- URL: ws://localhost:8081/feed?token={{jwt_token}}\n\nZerodha session flow (admin):\n1) Login as admin/super-admin and get jwt_token\n2) Obtain fresh request_token from Zerodha login (single-use, short-lived)\n3) Call POST /admin/zerodha/session with request_token (send token only, not callback URL)\n4) Access token is stored in DB and feed service uses latest active token\n5) Check status using GET /admin/zerodha/session/status",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -193,7 +193,7 @@
               { "key": "Authorization", "value": "Bearer {{jwt_token}}" }
             ],
             "url": {
-              "raw": "{{base_url}}/admin/global-instruments?page=1&limit=20&include_deleted=false&status=ACTIVE&segment=FOREX&exchange=FOREX&instrument_type=SPOT&search=GBP",
+              "raw": "{{base_url}}/admin/global-instruments?page=1&limit=20&include_deleted=false&status=ACTIVE&segment=FOREX&exchange=FOREX&instrument_type=SPOT&search=GBP&sort_by=symbol&sort_order=asc",
               "host": ["{{base_url}}"],
               "path": ["admin", "global-instruments"],
               "query": [
@@ -205,10 +205,12 @@
                 { "key": "exchange", "value": "FOREX" },
                 { "key": "instrument_type", "value": "SPOT" },
                 { "key": "search", "value": "GBP" },
-                { "key": "expiry", "value": "2026-05-26" }
+                { "key": "expiry", "value": "2026-05-26" },
+                { "key": "sort_by", "value": "symbol" },
+                { "key": "sort_order", "value": "asc" }
               ]
             },
-            "description": "Paginated list of global instruments.\nQuery params:\n- page: positive integer (default 1)\n- limit: positive integer, max 100 (default 20)\n- include_deleted: true or false (default false)\n- status: ACTIVE, INACTIVE\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- instrument_type: free text (usually SPOT/FUT/OPT)\n- expiry: YYYY-MM-DD, DD-MM-YYYY, DD-MM-YY, or RFC3339\n- search: partial match on symbol, subscribe_symbol_name, tradingsymbol, name\n\nResponse includes status_code, message, instruments, pagination."
+            "description": "Admin/Super-admin paginated list of global instruments (permission-based for ADMIN).\nQuery params:\n- page: positive integer (default 1)\n- limit: positive integer, max 5000 (default 20)\n- include_deleted: true or false (default false)\n- status: ACTIVE, INACTIVE\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- instrument_type: free text (usually SPOT/FUT/OPT)\n- expiry: YYYY-MM-DD, DD-MM-YYYY, DD-MM-YY, or RFC3339\n- search: partial match on symbol, subscribe_symbol_name, tradingsymbol, name\n- sort_by: any allowed global instrument column\n- sort_order: asc or desc\n\nResponse includes status_code, message, instruments, pagination."
           }
         },
         {
@@ -233,7 +235,7 @@
               "host": ["{{base_url}}"],
               "path": ["admin", "global-instruments", "import"]
             },
-            "description": "Bulk create or update global instruments from CSV/XLSX/XLSM file.\nConflict key: symbol. Existing row with same symbol will be updated.\nSupports your current sheet format with these columns in order:\n- instrument_token\n- exchange_token\n- tradingsymbol\n- name\n- subscribe_symbol_name\n- last_price\n- expiry (DD/MM/YY also supported)\n- last_price (used as strike column from the shared sheet format)\n- tick_size\n- lot_size\n- instrument_type\n- segment\n- exchange\n\nAlso supports extended format with symbol, strike, status, and is_deleted columns."
+            "description": "Admin/Super-admin route. Bulk create or update global instruments from CSV/XLSX/XLSM file.\nConflict key: symbol. Existing row with same symbol will be updated.\nRules:\n- field name must be file\n- only one file allowed\n- allowed extensions: .csv, .xlsx, .xlsm\n\nSupports your current sheet format with these columns in order:\n- instrument_token\n- exchange_token\n- tradingsymbol\n- name\n- subscribe_symbol_name\n- last_price\n- expiry (DD/MM/YY also supported)\n- last_price (used as strike column from the shared sheet format)\n- tick_size\n- lot_size\n- instrument_type\n- segment\n- exchange\n\nAlso supports extended format with symbol, strike, status, and is_deleted columns."
           }
         },
         {
@@ -256,14 +258,14 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"instrument_token\": 101001,\n  \"exchange_token\": 501001,\n  \"tradingsymbol\": \"GBPUSD\",\n  \"name\": \"British Pound/USD\",\n  \"subscribe_symbol_name\": \"GBPUSD\",\n  \"symbol\": \"GBPUSD\",\n  \"last_price\": 1.2765,\n  \"expiry\": null,\n  \"tick_size\": 0.0001,\n  \"lot_size\": 1,\n  \"instrument_type\": \"SPOT\",\n  \"segment\": \"FOREX\",\n  \"exchange\": \"FOREX\",\n  \"strike\": 0,\n  \"status\": \"ACTIVE\"\n}"
+              "raw": "{\n  \"instrument_token\": 101001,\n  \"exchange_token\": 501001,\n  \"tradingsymbol\": \"GBPUSD\",\n  \"name\": \"British Pound/USD\",\n  \"subscribe_symbol_name\": \"GBPUSD\",\n  \"symbol\": \"GBPUSD\",\n  \"last_price\": 1.2765,\n  \"expiry\": \"\",\n  \"tick_size\": 0.0001,\n  \"lot_size\": 1,\n  \"instrument_type\": \"SPOT\",\n  \"segment\": \"FOREX\",\n  \"exchange\": \"FOREX\",\n  \"strike\": 0,\n  \"status\": \"ACTIVE\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/admin/global-instruments",
               "host": ["{{base_url}}"],
               "path": ["admin", "global-instruments"]
             },
-            "description": "Create a new global instrument.\nBody params:\n- instrument_token: int64\n- exchange_token: int64\n- tradingsymbol: string\n- name: string\n- subscribe_symbol_name: string\n- symbol: optional, auto-derived from subscribe_symbol_name then tradingsymbol\n- last_price: number\n- expiry: null or date\n- tick_size: number\n- lot_size: integer\n- instrument_type: free text (usually SPOT/FUT/OPT)\n- strike: number\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- status: ACTIVE, INACTIVE"
+            "description": "Admin/Super-admin route. Create a new global instrument.\nBody params:\n- instrument_token: int64\n- exchange_token: int64\n- tradingsymbol: string\n- name: string\n- subscribe_symbol_name: string\n- symbol: optional, auto-derived from subscribe_symbol_name then tradingsymbol\n- last_price: number\n- expiry: dd-mm-yy or empty string\n- tick_size: number\n- lot_size: integer\n- instrument_type: free text (usually SPOT/FUT/OPT)\n- strike: number\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- status: ACTIVE, INACTIVE"
           }
         },
         {
@@ -276,14 +278,14 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"instrument_token\": 101001,\n  \"exchange_token\": 501001,\n  \"tradingsymbol\": \"GBPUSD\",\n  \"name\": \"British Pound/USD\",\n  \"subscribe_symbol_name\": \"GBPUSD\",\n  \"symbol\": \"GBPUSD\",\n  \"last_price\": 1.278,\n  \"expiry\": null,\n  \"tick_size\": 0.0001,\n  \"lot_size\": 1,\n  \"instrument_type\": \"SPOT\",\n  \"segment\": \"FOREX\",\n  \"exchange\": \"FOREX\",\n  \"strike\": 0,\n  \"status\": \"INACTIVE\",\n  \"is_deleted\": true\n}"
+              "raw": "{\n  \"instrument_token\": 101001,\n  \"exchange_token\": 501001,\n  \"tradingsymbol\": \"GBPUSD\",\n  \"name\": \"British Pound/USD\",\n  \"subscribe_symbol_name\": \"GBPUSD\",\n  \"symbol\": \"GBPUSD\",\n  \"last_price\": 1.278,\n  \"expiry\": \"\",\n  \"tick_size\": 0.0001,\n  \"lot_size\": 1,\n  \"instrument_type\": \"SPOT\",\n  \"segment\": \"FOREX\",\n  \"exchange\": \"FOREX\",\n  \"strike\": 0,\n  \"status\": \"INACTIVE\",\n  \"is_deleted\": true\n}"
             },
             "url": {
               "raw": "{{base_url}}/admin/global-instruments/{{global_instrument_id}}",
               "host": ["{{base_url}}"],
               "path": ["admin", "global-instruments", "{{global_instrument_id}}"]
             },
-            "description": "Update, soft delete, or undelete global instrument by ID.\nAccepted fields are same as Create Global Instrument body.\nEnum values:\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- status: ACTIVE, INACTIVE\nSoft delete controls:\n- is_deleted: true (delete), false (undelete)"
+            "description": "Admin/Super-admin route. Update, soft delete, or undelete global instrument by ID.\nAccepted fields are same as Create Global Instrument body.\nEnum values:\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- status: ACTIVE, INACTIVE\nExpiry format when provided: dd-mm-yy or empty string.\nSoft delete controls:\n- is_deleted: true (delete), false (undelete)"
           }
         },
         {
@@ -302,7 +304,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"username\": \"demo_user\"\n}"
+              "raw": "{\n  \"username\": \"demo_user\",\n  \"password\": \"Demo@123\",\n  \"role\": \"USER\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/admin/users",
@@ -314,7 +316,7 @@
                 "users"
               ]
             },
-            "description": "Admin-only. Create new USER account without password login flow."
+            "description": "Create user account by role policy.\n- ADMIN can create only USER\n- SUPER_ADMIN can create USER and ADMIN\n- SUPER_ADMIN cannot create SUPER_ADMIN via this endpoint\n- when SUPER_ADMIN creates ADMIN, default admin permissions are auto-assigned\nBody:\n- username (required)\n- password (required, min 6 chars)\n- role (optional: USER | ADMIN | SUPER_ADMIN; default USER)"
           },
           "response": []
         },
@@ -338,7 +340,7 @@
                 "users"
               ]
             },
-            "description": "Admin-only. List all users with role and active status."
+            "description": "Admin/Super-admin route. List all users with role and active status (permission-based for ADMIN)."
           },
           "response": []
         },
@@ -363,7 +365,7 @@
                 "{{user_id}}"
               ]
             },
-            "description": "Admin-only. Fetch user detail by UUID user_id."
+            "description": "Admin/Super-admin route. Fetch user detail by UUID user_id (permission-based for ADMIN)."
           },
           "response": []
         },
@@ -397,7 +399,7 @@
                 "status"
               ]
             },
-            "description": "Admin-only. Enable/disable user.\nBody: is_active = true/false"
+            "description": "Admin/Super-admin route. Enable/disable user.\nBody: is_active = true/false"
           },
           "response": []
         },
@@ -422,7 +424,7 @@
                 "{{user_id}}"
               ]
             },
-            "description": "Admin-only. Delete non-admin user by user_id."
+            "description": "Delete user by user_id with role policy.\n- ADMIN cannot delete ADMIN/SUPER_ADMIN users\n- Cannot delete own account"
           },
           "response": []
         },
@@ -454,7 +456,7 @@
                 "change-password"
               ]
             },
-            "description": "Admin-only. Change current admin password.\nValidation:\n- current_password required\n- new_password required (min 6 chars)\n- new_password must be different"
+            "description": "Admin/Super-admin route. Change current password.\nValidation:\n- current_password required\n- new_password required (min 6 chars)\n- new_password must be different"
           },
           "response": []
         },
@@ -490,7 +492,7 @@
                 "logout"
               ]
             },
-            "description": "Admin-only. Logout current admin session.\nToken is revoked server-side; old JWT should stop working."
+            "description": "Admin/Super-admin route. Logout current session.\nToken is revoked server-side; old JWT should stop working."
           },
           "response": []
         },
@@ -525,7 +527,7 @@
                 "import"
               ]
             },
-            "description": "Admin-only. Import instruments using multipart/form-data.\nRules:\n- field name must be file\n- only one file allowed\n- only .csv file allowed"
+            "description": "Admin/Super-admin route. Import instruments using multipart/form-data.\nRules:\n- field name must be file\n- only one file allowed\n- only .csv file allowed"
           },
           "response": []
         },
@@ -540,7 +542,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/admin/instruments?page=1&limit=20&include_deleted=false&instrument_type=PE&segment=NFO-OPT&exchange=NFO&status=ACTIVE&expiry=11-03-26&search=VBL",
+              "raw": "{{base_url}}/admin/instruments?page=1&limit=20&include_deleted=false&instrument_type=PE&segment=NFO-OPT&exchange=CE-PE&status=ACTIVE&expiry=11-03-26&search=VBL&sort_by=instrument_token&sort_order=asc",
               "host": [
                 "{{base_url}}"
               ],
@@ -571,7 +573,7 @@
                 },
                 {
                   "key": "exchange",
-                  "value": "NFO"
+                  "value": "CE-PE"
                 },
                 {
                   "key": "status",
@@ -584,10 +586,18 @@
                 {
                   "key": "search",
                   "value": "VBL"
+                },
+                {
+                  "key": "sort_by",
+                  "value": "instrument_token"
+                },
+                {
+                  "key": "sort_order",
+                  "value": "asc"
                 }
               ]
             },
-            "description": "Admin-only paginated instrument list with filters.\nQuery params:\n- page: positive integer (default 1)\n- limit: positive integer, max 100 (default 20)\n- include_deleted: true/false (default false)\n- instrument_type: CE, EQ, FUT, PE\n- segment: INDICES, CDS-FUT, CDS-OPT, MCX-FUT, MCX-OPT, NCO-FUT, NFO-FUT, NFO-OPT\n- exchange: CDS, MCX, NCO, NFO\n- status: ACTIVE, INACTIVE\n- expiry: dd-mm-yy\n- search: token/tradingsymbol/name partial match"
+            "description": "Admin/Super-admin paginated instrument list with filters.\nQuery params:\n- page: positive integer (default 1)\n- limit: positive integer, max 5000 (default 20)\n- include_deleted: true/false (default false)\n- instrument_type: CE, EQ, FUT, PE\n- segment: NFO-FUT, MCX-FUT, NFO-OPT, CDS-FUT, EQUITY\n- exchange: NSE, MCX, MCX-MINI, CE-PE, CDS, NSE-EQU\n- status: ACTIVE, INACTIVE\n- expiry: dd-mm-yy\n- search: token/tradingsymbol/name partial match\n- sort_by: any allowed instrument column\n- sort_order: asc or desc"
           },
           "response": []
         },
@@ -612,7 +622,7 @@
                 "{{instrument_id}}"
               ]
             },
-            "description": "Admin-only. Get instrument by UUID instrument_id."
+            "description": "Admin/Super-admin route. Get instrument by UUID instrument_id."
           },
           "response": []
         },
@@ -644,7 +654,7 @@
                 "instruments"
               ]
             },
-            "description": "Admin-only. Create Zerodha instrument.\nBody enum values:\n- instrument_type: CE, EQ, FUT, PE\n- segment: INDICES, CDS-FUT, CDS-OPT, MCX-FUT, MCX-OPT, NCO-FUT, NFO-FUT, NFO-OPT\n- exchange: CDS, MCX, NCO, NFO\n- status: ACTIVE, INACTIVE\nExpiry format: dd-mm-yy or empty string."
+            "description": "Admin/Super-admin route. Create Zerodha instrument.\nBody enum values:\n- instrument_type: CE, EQ, FUT, PE\n- segment: NFO-FUT, MCX-FUT, NFO-OPT, CDS-FUT, EQUITY\n- exchange: NSE, MCX, MCX-MINI, CE-PE, CDS, NSE-EQU\n- status: ACTIVE, INACTIVE\nExpiry format: dd-mm-yy or empty string."
           },
           "response": []
         },
@@ -677,7 +687,7 @@
                 "{{instrument_id}}"
               ]
             },
-            "description": "Admin-only. Update Zerodha instrument by UUID instrument_id.\nAt least one field required in body.\nAllowed enum values when provided:\n- instrument_type: CE, EQ, FUT, PE\n- segment: INDICES, CDS-FUT, CDS-OPT, MCX-FUT, MCX-OPT, NCO-FUT, NFO-FUT, NFO-OPT\n- exchange: CDS, MCX, NCO, NFO\n- status: ACTIVE, INACTIVE"
+            "description": "Admin/Super-admin route. Update Zerodha instrument by UUID instrument_id.\nAt least one field required in body.\nAllowed enum values when provided:\n- instrument_type: CE, EQ, FUT, PE\n- segment: NFO-FUT, MCX-FUT, NFO-OPT, CDS-FUT, EQUITY\n- exchange: NSE, MCX, MCX-MINI, CE-PE, CDS, NSE-EQU\n- status: ACTIVE, INACTIVE"
           },
           "response": []
         },
@@ -702,7 +712,7 @@
                 "{{instrument_id}}"
               ]
             },
-            "description": "Admin-only. Soft delete instrument (is_deleted=true, status=INACTIVE)."
+            "description": "Admin/Super-admin route. Soft delete instrument (is_deleted=true, status=INACTIVE)."
           },
           "response": []
         },
@@ -728,7 +738,7 @@
                 "status"
               ]
             },
-            "description": "Returns current active Zerodha session status from database"
+            "description": "Admin/Super-admin route. Returns current active Zerodha session status from database"
           },
           "response": []
         },
@@ -761,7 +771,7 @@
                 "session"
               ]
             },
-            "description": "Exchange fresh Zerodha request_token for access_token and store active session in database"
+            "description": "Admin/Super-admin route. Exchange fresh Zerodha request_token for access_token and store active session in database"
           },
           "response": []
         },
@@ -785,7 +795,67 @@
                 "stats"
               ]
             },
-            "description": "Admin-only. Returns overall system stats (users and connected clients)."
+            "description": "Admin/Super-admin route. Returns overall system stats (users and connected clients)."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Admin Permissions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/admins/{{admin_user_id}}/permissions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "admins",
+                "{{admin_user_id}}",
+                "permissions"
+              ]
+            },
+            "description": "SUPER_ADMIN only. Get current permission list for a target ADMIN user."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Admin Permissions",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"permissions\": [\n    \"users:read\",\n    \"users:create\",\n    \"instruments:read\",\n    \"global_instruments:read\",\n    \"zerodha_session:read\"\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/admins/{{admin_user_id}}/permissions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "admins",
+                "{{admin_user_id}}",
+                "permissions"
+              ]
+            },
+            "description": "SUPER_ADMIN only. Replace full permission set for target ADMIN user.\nRules:\n- Only ADMIN role users are allowed as target\n- permissions array values must be from default admin permission list\n- Empty array removes all permissions"
           },
           "response": []
         }
@@ -824,13 +894,33 @@
       "type": "string"
     },
     {
+      "key": "admin_user_id",
+      "value": "",
+      "type": "string"
+    },
+    {
       "key": "instrument_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "global_instrument_id",
       "value": "",
       "type": "string"
     },
     {
       "key": "request_token",
       "value": "",
+      "type": "string"
+    },
+    {
+      "key": "super_admin_username",
+      "value": "superadmin@gmail.com",
+      "type": "string"
+    },
+    {
+      "key": "super_admin_password",
+      "value": "SuperAdmin@123",
       "type": "string"
     }
   ]

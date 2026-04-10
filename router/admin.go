@@ -19,4 +19,6 @@ func RegisterAdminRoutes(app *fiber.App, adminController *controller.AdminContro
 	adminRoutes.Post("/logout", middleware.RequireAdminPermission(db, middleware.PermUsersLogout), adminController.Logout)
 	adminRoutes.Post("/change-password", middleware.RequireAdminPermission(db, middleware.PermUsersChangePassword), validator.ValidateAdminChangePassword, adminController.ChangePassword)
 	adminRoutes.Get("/stats", middleware.RequireAdminPermission(db, middleware.PermAdminStatsRead), adminController.GetStats)
+	adminRoutes.Get("/admins/:id/permissions", middleware.SuperAdminOnlyAuth, adminController.GetAdminPermissions)
+	adminRoutes.Put("/admins/:id/permissions", middleware.SuperAdminOnlyAuth, adminController.UpdateAdminPermissions)
 }

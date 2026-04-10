@@ -12,7 +12,7 @@ type ZerodhaSession struct {
 	AccessToken      string    `gorm:"type:text;not null" json:"-"`
 	GeneratedAt      time.Time `gorm:"not null;index" json:"generated_at"`
 	UpdatedByAdminID *string   `gorm:"type:uuid;index" json:"updated_by_admin_id,omitempty"`
-	UpdatedByAdmin   *User     `gorm:"foreignKey:UpdatedByAdminID" json:"-"`
+	UpdatedByAdmin   *User     `gorm:"foreignKey:UpdatedByAdminID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
 	IsActive         bool      `gorm:"not null;default:true;index" json:"is_active"`
 	LastError        string    `gorm:"type:text" json:"last_error,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`

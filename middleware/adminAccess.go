@@ -51,6 +51,14 @@ var DefaultAdminPermissions = []string{
 	PermZerodhaSessionUpdate,
 }
 
+var DefaultAdminPermissionSet = func() map[string]struct{} {
+	set := make(map[string]struct{}, len(DefaultAdminPermissions))
+	for _, perm := range DefaultAdminPermissions {
+		set[perm] = struct{}{}
+	}
+	return set
+}()
+
 func AdminOrSuperAdminAuth(c *fiber.Ctx) error {
 	claimsValue := c.Locals("jwt_claims")
 	_, ok := claimsValue.(*UserJWTClaims)
@@ -119,6 +127,28 @@ func RequireAdminPermission(db *gorm.DB, permission string) fiber.Handler {
 
 		return c.Next()
 	}
+}
+
+func SuperAdminOnlyAuth(c *fiber.Ctx) error {
+	userValue := c.Locals("user")
+	user, ok := userValue.(*models.User)
+	if !ok || user == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"status_code": fiber.StatusUnauthorized,
+			"message":     "invalid authenticated user",
+			"error":       "invalid authenticated user",
+		})
+	}
+
+	if !user.IsSuperAdminRole() {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"status_code": fiber.StatusForbidden,
+			"message":     "super admin access required",
+			"error":       "super admin access required",
+		})
+	}
+
+	return c.Next()
 }
 
 // Backward compatibility alias used by existing code paths.

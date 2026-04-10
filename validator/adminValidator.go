@@ -8,6 +8,7 @@ import (
 
 type CreateUserRequest struct {
 	Username string `json:"username"`
+	Password string `json:"password"`
 	Role     string `json:"role"`
 }
 
@@ -31,6 +32,7 @@ func ValidateCreateUser(c *fiber.Ctx) error {
 	}
 
 	req.Username = strings.TrimSpace(req.Username)
+	req.Password = strings.TrimSpace(req.Password)
 	req.Role = strings.ToUpper(strings.TrimSpace(req.Role))
 	if req.Username == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -53,6 +55,22 @@ func ValidateCreateUser(c *fiber.Ctx) error {
 			"status_code": fiber.StatusBadRequest,
 			"message":     "username must not exceed 50 characters",
 			"error":       "username must not exceed 50 characters",
+		})
+	}
+
+	if req.Password == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "password is required",
+			"error":       "password is required",
+		})
+	}
+
+	if len(req.Password) < 6 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "password must be at least 6 characters",
+			"error":       "password must be at least 6 characters",
 		})
 	}
 

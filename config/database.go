@@ -392,6 +392,53 @@ $$;`
 	return db.Exec(convertGlobalMarketEnumSQL).Error
 }
 
+func ensureForeignKeys(db *gorm.DB) error {
+	ensureFKSQL := `
+DO $$
+BEGIN
+	DELETE FROM admin_permissions ap
+	WHERE NOT EXISTS (
+		SELECT 1 FROM users u WHERE u.id = ap.user_id
+	);
+
+	UPDATE zerodha_sessions zs
+	SET updated_by_admin_id = NULL
+	WHERE updated_by_admin_id IS NOT NULL
+	  AND NOT EXISTS (
+		SELECT 1 FROM users u WHERE u.id = zs.updated_by_admin_id
+	  );
+
+	IF NOT EXISTS (
+		SELECT 1
+		FROM pg_constraint
+		WHERE conname = 'admin_permissions_user_id_fkey'
+	) THEN
+		ALTER TABLE admin_permissions
+			ADD CONSTRAINT admin_permissions_user_id_fkey
+			FOREIGN KEY (user_id)
+			REFERENCES users(id)
+			ON UPDATE CASCADE
+			ON DELETE CASCADE;
+	END IF;
+
+	IF NOT EXISTS (
+		SELECT 1
+		FROM pg_constraint
+		WHERE conname = 'zerodha_sessions_updated_by_admin_id_fkey'
+	) THEN
+		ALTER TABLE zerodha_sessions
+			ADD CONSTRAINT zerodha_sessions_updated_by_admin_id_fkey
+			FOREIGN KEY (updated_by_admin_id)
+			REFERENCES users(id)
+			ON UPDATE CASCADE
+			ON DELETE SET NULL;
+	END IF;
+END
+$$;`
+
+	return db.Exec(ensureFKSQL).Error
+}
+
 func ConnectDatabase() {
 	dbMu.Lock()
 	defer dbMu.Unlock()
@@ -447,6 +494,11 @@ func ConnectDatabase() {
 	); err != nil {
 		_ = sqlDB.Close()
 		log.Fatal("failed to run migrations: ", err)
+	}
+
+	if err := ensureForeignKeys(db); err != nil {
+		_ = sqlDB.Close()
+		log.Fatal("failed to ensure foreign keys: ", err)
 	}
 
 	if err := db.Exec(`

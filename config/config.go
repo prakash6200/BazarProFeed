@@ -36,11 +36,17 @@ type RedisConfig struct {
 	DB       string
 }
 
+type SecurityConfig struct {
+	SuperAdminUsername string
+	SuperAdminPassword string
+}
+
 type Configuration struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 	Zerodha  ZerodhaConfig
 	Redis    RedisConfig
+	Security SecurityConfig
 }
 
 var (
@@ -78,6 +84,10 @@ func LoadConfig() {
 				Addr:     getEnv("REDIS_ADDR", "localhost:6379"),
 				Password: getEnv("REDIS_PASSWORD", ""),
 				DB:       getEnv("REDIS_DB", "0"),
+			},
+			Security: SecurityConfig{
+				SuperAdminUsername: getEnv("SUPER_ADMIN_USERNAME", getEnv("DEFAULT_ADMIN_USERNAME", "")),
+				SuperAdminPassword: getEnv("SUPER_ADMIN_PASSWORD", getEnv("DEFAULT_ADMIN_PASSWORD", "")),
 			},
 		}
 	})

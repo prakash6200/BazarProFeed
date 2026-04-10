@@ -10,6 +10,7 @@ import (
 type AdminPermission struct {
 	ID         string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
 	UserID     string    `gorm:"type:uuid;index:idx_admin_permissions_user_perm,unique;not null" json:"user_id"`
+	User       *User     `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	Permission string    `gorm:"type:text;index:idx_admin_permissions_user_perm,unique;not null" json:"permission"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -64,4 +65,38 @@ func ListPermissionsByUserID(db *gorm.DB, userID string) ([]string, error) {
 		Order("permission ASC").
 		Pluck("permission", &permissions).Error
 	return permissions, err
+}
+
+func ReplacePermissionsForUser(db *gorm.DB, userID string, permissions []string) error {
+	if strings.TrimSpace(userID) == "" {
+		return nil
+	}
+
+	tx := db.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+
+	if err := tx.Where("user_id = ?", userID).Delete(&AdminPermission{}).Error; err != nil {
+		_ = tx.Rollback().Error
+		return err
+	}
+
+	for _, permission := range permissions {
+		norm := normalizePermission(permission)
+		if norm == "" {
+			continue
+		}
+		if err := GrantPermission(tx, userID, norm); err != nil {
+			_ = tx.Rollback().Error
+			return err
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		_ = tx.Rollback().Error
+		return err
+	}
+
+	return nil
 }

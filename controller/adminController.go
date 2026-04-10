@@ -3,9 +3,11 @@ package controller
 import (
 	"errors"
 	"feedprovider/config"
+	"feedprovider/middleware"
 	"feedprovider/models"
 	"feedprovider/validator"
 	"log"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
@@ -14,6 +16,10 @@ import (
 type AdminController struct {
 	db        *gorm.DB
 	socketHub *config.SocketHub
+}
+
+type updateAdminPermissionsRequest struct {
+	Permissions []string `json:"permissions"`
 }
 
 func NewAdminController(db *gorm.DB, socketHub *config.SocketHub) *AdminController {
@@ -73,9 +79,42 @@ func (ac *AdminController) CreateUser(c *fiber.Ctx) error {
 		})
 	}
 
-	user, err := models.CreateUser(ac.db, req.Username, targetRole)
+	tx := ac.db.Begin()
+	if tx.Error != nil {
+		log.Printf("error starting transaction for user creation: %v", tx.Error)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to create user",
+			"error":       "failed to create user",
+		})
+	}
+
+	user, err := models.CreateUserWithPassword(tx, req.Username, req.Password, targetRole)
 	if err != nil {
+		_ = tx.Rollback().Error
 		log.Printf("error creating user: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to create user",
+			"error":       "failed to create user",
+		})
+	}
+
+	if targetRole == models.RoleAdmin {
+		if err := models.GrantPermissions(tx, user.ID, middleware.DefaultAdminPermissions); err != nil {
+			_ = tx.Rollback().Error
+			log.Printf("error assigning default admin permissions: user_id=%s err=%v", user.ID, err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"status_code": fiber.StatusInternalServerError,
+				"message":     "failed to assign default admin permissions",
+				"error":       "failed to assign default admin permissions",
+			})
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		_ = tx.Rollback().Error
+		log.Printf("error committing user creation transaction: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "failed to create user",
@@ -358,6 +397,154 @@ func (ac *AdminController) ChangePassword(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status_code": fiber.StatusOK,
 		"message":     "password changed successfully, please login again",
+	})
+}
+
+func (ac *AdminController) GetAdminPermissions(c *fiber.Ctx) error {
+	targetUserID := strings.TrimSpace(c.Params("id"))
+	if targetUserID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "user id is required",
+			"error":       "user id is required",
+		})
+	}
+
+	targetUser, err := models.GetUserByID(ac.db, targetUserID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"status_code": fiber.StatusNotFound,
+				"message":     "user not found",
+				"error":       "user not found",
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch user",
+			"error":       "failed to fetch user",
+		})
+	}
+
+	if targetUser.EffectiveRole() != models.RoleAdmin {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "permissions can only be managed for ADMIN role",
+			"error":       "permissions can only be managed for ADMIN role",
+		})
+	}
+
+	permissions, err := models.ListPermissionsByUserID(ac.db, targetUserID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch admin permissions",
+			"error":       "failed to fetch admin permissions",
+		})
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"message":     "admin permissions fetched successfully",
+		"user": fiber.Map{
+			"id":       targetUser.ID,
+			"username": targetUser.Username,
+			"role":     targetUser.EffectiveRole(),
+		},
+		"permissions": permissions,
+	})
+}
+
+func (ac *AdminController) UpdateAdminPermissions(c *fiber.Ctx) error {
+	targetUserID := strings.TrimSpace(c.Params("id"))
+	if targetUserID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "user id is required",
+			"error":       "user id is required",
+		})
+	}
+
+	targetUser, err := models.GetUserByID(ac.db, targetUserID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"status_code": fiber.StatusNotFound,
+				"message":     "user not found",
+				"error":       "user not found",
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch user",
+			"error":       "failed to fetch user",
+		})
+	}
+
+	if targetUser.EffectiveRole() != models.RoleAdmin {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "permissions can only be managed for ADMIN role",
+			"error":       "permissions can only be managed for ADMIN role",
+		})
+	}
+
+	var req updateAdminPermissionsRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
+			"error":       "invalid request body",
+		})
+	}
+
+	validated := make([]string, 0, len(req.Permissions))
+	seen := make(map[string]struct{}, len(req.Permissions))
+	for _, perm := range req.Permissions {
+		norm := strings.ToLower(strings.TrimSpace(perm))
+		if norm == "" {
+			continue
+		}
+		if _, ok := middleware.DefaultAdminPermissionSet[norm]; !ok {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "invalid permission: " + norm,
+				"error":       "invalid permission: " + norm,
+			})
+		}
+		if _, exists := seen[norm]; exists {
+			continue
+		}
+		seen[norm] = struct{}{}
+		validated = append(validated, norm)
+	}
+
+	if err := models.ReplacePermissionsForUser(ac.db, targetUser.ID, validated); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to update admin permissions",
+			"error":       "failed to update admin permissions",
+		})
+	}
+
+	updated, err := models.ListPermissionsByUserID(ac.db, targetUser.ID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "permissions updated but fetch failed",
+			"error":       "permissions updated but fetch failed",
+		})
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"message":     "admin permissions updated successfully",
+		"user": fiber.Map{
+			"id":       targetUser.ID,
+			"username": targetUser.Username,
+			"role":     targetUser.EffectiveRole(),
+		},
+		"permissions": updated,
 	})
 }
 
