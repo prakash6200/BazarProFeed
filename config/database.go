@@ -514,6 +514,24 @@ func ConnectDatabase() {
 		log.Fatal("failed to run migrations: ", err)
 	}
 
+	if err := db.Exec(`
+ALTER TABLE admin_permissions
+	ADD COLUMN IF NOT EXISTS is_allowed boolean;
+
+UPDATE admin_permissions
+SET is_allowed = true
+WHERE is_allowed IS NULL;
+
+ALTER TABLE admin_permissions
+	ALTER COLUMN is_allowed SET DEFAULT true;
+
+ALTER TABLE admin_permissions
+	ALTER COLUMN is_allowed SET NOT NULL;
+`).Error; err != nil {
+		_ = sqlDB.Close()
+		log.Fatal("failed to finalize admin permissions migration: ", err)
+	}
+
 	if err := ensureForeignKeys(db); err != nil {
 		_ = sqlDB.Close()
 		log.Fatal("failed to ensure foreign keys: ", err)

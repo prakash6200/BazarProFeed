@@ -821,7 +821,7 @@
                 "permissions"
               ]
             },
-            "description": "SUPER_ADMIN only. Get current permission list for a target ADMIN user."
+            "description": "SUPER_ADMIN only. Get current permission list for a target ADMIN user with allowed true/false status for each API permission."
           },
           "response": []
         },
@@ -841,7 +841,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"permissions\": [\n    \"users:read\",\n    \"users:create\",\n    \"instruments:read\",\n    \"global_instruments:read\",\n    \"zerodha_session:read\"\n  ]\n}"
+              "raw": "{\n  \"permissions\": [\n    { \"permission\": \"users:read\", \"allowed\": true },\n    { \"permission\": \"users:create\", \"allowed\": true },\n    { \"permission\": \"users:delete\", \"allowed\": false },\n    { \"permission\": \"instruments:read\", \"allowed\": true },\n    { \"permission\": \"global_instruments:read\", \"allowed\": true },\n    { \"permission\": \"zerodha_session:update\", \"allowed\": false }\n  ]\n}"
             },
             "url": {
               "raw": "{{base_url}}/admin/admins/{{admin_user_id}}/permissions",
@@ -855,7 +855,7 @@
                 "permissions"
               ]
             },
-            "description": "SUPER_ADMIN only. Replace full permission set for target ADMIN user.\nRules:\n- Only ADMIN role users are allowed as target\n- permissions array values must be from default admin permission list\n- Empty array removes all permissions"
+            "description": "SUPER_ADMIN only. Replace full permission set for target ADMIN user using true/false flags.\nRules:\n- Only ADMIN role users are allowed as target\n- permissions[].permission must be from default admin permission list\n- permissions[].allowed=true gives access, false denies access\n- Missing permissions are treated as false"
           },
           "response": []
         }

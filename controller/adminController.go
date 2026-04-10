@@ -19,7 +19,7 @@ type AdminController struct {
 }
 
 type updateAdminPermissionsRequest struct {
-	Permissions []string `json:"permissions"`
+	Permissions []models.PermissionState `json:"permissions"`
 }
 
 func NewAdminController(db *gorm.DB, socketHub *config.SocketHub) *AdminController {
@@ -434,7 +434,7 @@ func (ac *AdminController) GetAdminPermissions(c *fiber.Ctx) error {
 		})
 	}
 
-	permissions, err := models.ListPermissionsByUserID(ac.db, targetUserID)
+	permissions, err := models.ListPermissionStatesByUserID(ac.db, targetUserID, middleware.DefaultAdminPermissions)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -498,10 +498,14 @@ func (ac *AdminController) UpdateAdminPermissions(c *fiber.Ctx) error {
 		})
 	}
 
-	validated := make([]string, 0, len(req.Permissions))
+	defaultState := make(map[string]bool, len(middleware.DefaultAdminPermissions))
+	for _, perm := range middleware.DefaultAdminPermissions {
+		defaultState[strings.ToLower(strings.TrimSpace(perm))] = false
+	}
+
 	seen := make(map[string]struct{}, len(req.Permissions))
-	for _, perm := range req.Permissions {
-		norm := strings.ToLower(strings.TrimSpace(perm))
+	for _, permState := range req.Permissions {
+		norm := strings.ToLower(strings.TrimSpace(permState.Permission))
 		if norm == "" {
 			continue
 		}
@@ -516,10 +520,19 @@ func (ac *AdminController) UpdateAdminPermissions(c *fiber.Ctx) error {
 			continue
 		}
 		seen[norm] = struct{}{}
-		validated = append(validated, norm)
+		defaultState[norm] = permState.Allowed
 	}
 
-	if err := models.ReplacePermissionsForUser(ac.db, targetUser.ID, validated); err != nil {
+	replacementStates := make([]models.PermissionState, 0, len(middleware.DefaultAdminPermissions))
+	for _, perm := range middleware.DefaultAdminPermissions {
+		norm := strings.ToLower(strings.TrimSpace(perm))
+		replacementStates = append(replacementStates, models.PermissionState{
+			Permission: norm,
+			Allowed:    defaultState[norm],
+		})
+	}
+
+	if err := models.ReplacePermissionStatesForUser(ac.db, targetUser.ID, replacementStates); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "failed to update admin permissions",
@@ -527,7 +540,7 @@ func (ac *AdminController) UpdateAdminPermissions(c *fiber.Ctx) error {
 		})
 	}
 
-	updated, err := models.ListPermissionsByUserID(ac.db, targetUser.ID)
+	updated, err := models.ListPermissionStatesByUserID(ac.db, targetUser.ID, middleware.DefaultAdminPermissions)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
