@@ -86,7 +86,10 @@ func main() {
 	})
 
 	globSocketHub.SetInitialStateGetter(func(ctx context.Context, filterSym string) []json.RawMessage {
-		ticks := globalCache.Snapshot(ctx, services.GlobalTickPrefix, filterSym)
+		ticks := globMarketFeedService.RecentTicks(filterSym)
+		if len(ticks) == 0 {
+			ticks = globalCache.Snapshot(ctx, services.GlobalTickPrefix, filterSym)
+		}
 		status := services.MarketStatusOpen
 		if !services.IsGlobalMarketOpen() {
 			status = services.MarketStatusClosed
