@@ -179,6 +179,72 @@
             "description": "Refresh both API token and JWT token for current logged in user.\nBody requires old_token = current api_token.\nPostman test script updates collection tokens automatically."
           },
           "response": []
+        },
+        {
+          "name": "Global Candles (Last 24h)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"CMDTY\",\n  \"symbol\": \"XAUUSD\",\n  \"interval\": \"1m\",\n  \"page\": 1,\n  \"sizePerPage\": 50\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/global/candles",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "global",
+                "candles"
+              ]
+            },
+            "description": "Fetch global OHLC candles for last 24 hours from stored ticks.\nBody:\n- exchange: optional\n- symbol: optional\n- interval: 1m | 5m | 15m\n- page: positive integer\n- sizePerPage: max 200"
+          },
+          "response": []
+        },
+        {
+          "name": "Global Candle Ticks (Last 24h)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"CMDTY\",\n  \"symbol\": \"XAUUSD\",\n  \"interval\": \"1m\",\n  \"page\": 1,\n  \"sizePerPage\": 50\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/global/ticks",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "global",
+                "ticks"
+              ]
+            },
+            "description": "Fetch candle-wise tick list for last 24 hours from stored ticks.\nBody:\n- exchange: optional\n- symbol: optional\n- interval: 1m | 5m | 15m\n- page: positive integer\n- sizePerPage: max 500\nResponse returns candle_ticks[], where each candle includes all ticks in that interval bucket."
+          },
+          "response": []
         }
       ]
     },

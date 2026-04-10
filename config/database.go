@@ -506,6 +506,7 @@ func ConnectDatabase() {
 		&models.User{},
 		&models.AdminPermission{},
 		&models.AdminAPIAuditLog{},
+		&models.GlobalTickEvent{},
 		&models.Instrument{},
 		&models.GlobalInstrument{},
 		&models.ZerodhaSession{},

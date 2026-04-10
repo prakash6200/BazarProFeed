@@ -7,6 +7,7 @@ import (
 	"feedprovider/models"
 	"feedprovider/validator"
 	"log"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
@@ -15,6 +16,22 @@ import (
 type UserController struct {
 	db        *gorm.DB
 	socketHub *config.SocketHub
+}
+
+type GlobalCandlesRequest struct {
+	Exchange    string `json:"exchange"`
+	Symbol      string `json:"symbol"`
+	Interval    string `json:"interval"`
+	Page        int    `json:"page"`
+	SizePerPage int    `json:"sizePerPage"`
+}
+
+type GlobalRawTicksRequest struct {
+	Exchange    string `json:"exchange"`
+	Symbol      string `json:"symbol"`
+	Interval    string `json:"interval"`
+	Page        int    `json:"page"`
+	SizePerPage int    `json:"sizePerPage"`
 }
 
 func NewUserController(db *gorm.DB, socketHub *config.SocketHub) *UserController {
@@ -215,6 +232,156 @@ func (uc *UserController) RefreshToken(c *fiber.Ctx) error {
 			"jwt_token":          jwtToken,
 			"api_token":          user.APIToken,
 			"token_generated_at": user.TokenGeneratedAt,
+		},
+	})
+}
+
+func (uc *UserController) GetGlobalCandles(c *fiber.Ctx) error {
+	var req GlobalCandlesRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
+			"error":       "invalid request body",
+		})
+	}
+
+	interval := strings.ToLower(strings.TrimSpace(req.Interval))
+	intervalMinutes := 1
+	switch interval {
+	case "", "1m":
+		interval = "1m"
+		intervalMinutes = 1
+	case "5m":
+		intervalMinutes = 5
+	case "15m":
+		intervalMinutes = 15
+	default:
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "interval must be one of: 1m, 5m, 15m",
+			"error":       "interval must be one of: 1m, 5m, 15m",
+		})
+	}
+
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.SizePerPage <= 0 {
+		req.SizePerPage = 20
+	}
+	if req.SizePerPage > 200 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "sizePerPage must be less than or equal to 200",
+			"error":       "sizePerPage must be less than or equal to 200",
+		})
+	}
+
+	rows, total, err := models.ListGlobalCandlesLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.GlobalTickQueryFilters{
+		Exchange: req.Exchange,
+		Symbol:   req.Symbol,
+	})
+	if err != nil {
+		log.Printf("error fetching global candles: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch global candles",
+			"error":       "failed to fetch global candles",
+		})
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(req.SizePerPage) - 1) / int64(req.SizePerPage))
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"message":     "global candles fetched successfully",
+		"candles":     rows,
+		"pagination": fiber.Map{
+			"page":         req.Page,
+			"sizePerPage":  req.SizePerPage,
+			"totalRecords": total,
+			"totalPages":   totalPages,
+			"interval":     interval,
+			"duration":     "24h",
+		},
+	})
+}
+
+func (uc *UserController) GetGlobalRawTicks(c *fiber.Ctx) error {
+	var req GlobalRawTicksRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
+			"error":       "invalid request body",
+		})
+	}
+
+	interval := strings.ToLower(strings.TrimSpace(req.Interval))
+	intervalMinutes := 1
+	switch interval {
+	case "", "1m":
+		interval = "1m"
+		intervalMinutes = 1
+	case "5m":
+		intervalMinutes = 5
+	case "15m":
+		intervalMinutes = 15
+	default:
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "interval must be one of: 1m, 5m, 15m",
+			"error":       "interval must be one of: 1m, 5m, 15m",
+		})
+	}
+
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.SizePerPage <= 0 {
+		req.SizePerPage = 50
+	}
+	if req.SizePerPage > 500 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "sizePerPage must be less than or equal to 500",
+			"error":       "sizePerPage must be less than or equal to 500",
+		})
+	}
+
+	candleTicks, total, err := models.ListGlobalCandleTicksLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.GlobalTickQueryFilters{
+		Exchange: req.Exchange,
+		Symbol:   req.Symbol,
+	})
+	if err != nil {
+		log.Printf("error fetching global candle ticks: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch global candle ticks",
+			"error":       "failed to fetch global candle ticks",
+		})
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(req.SizePerPage) - 1) / int64(req.SizePerPage))
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code":  fiber.StatusOK,
+		"message":      "global candle ticks fetched successfully",
+		"candle_ticks": candleTicks,
+		"pagination": fiber.Map{
+			"page":         req.Page,
+			"sizePerPage":  req.SizePerPage,
+			"totalRecords": total,
+			"totalPages":   totalPages,
+			"interval":     interval,
+			"duration":     "24h",
 		},
 	})
 }

@@ -275,6 +275,13 @@ func (g *GlobalMarketFeedService) readLoop(tickHub *TickHub) {
 		}
 		updated := g.marketState.Update(tick)
 		updated.MarketStatus = MarketStatusOpen
+		if g.db != nil {
+			if payload, err := json.Marshal(updated); err == nil {
+				if err := models.CreateGlobalTickEvent(g.db, updated.Exchange, updated.Symbol, updated.LTP, updated.Timestamp, payload); err != nil {
+					log.Printf("global market feed: failed to persist tick event symbol=%s err=%v", updated.Symbol, err)
+				}
+			}
+		}
 		g.lastInboundTickAt.Store(time.Now().UnixNano())
 		if tickHub != nil {
 			tickHub.Publish(updated)
