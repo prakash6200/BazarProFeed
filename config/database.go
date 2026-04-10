@@ -396,6 +396,11 @@ func ensureForeignKeys(db *gorm.DB) error {
 	ensureFKSQL := `
 DO $$
 BEGIN
+	DELETE FROM admin_api_audit_logs al
+	WHERE NOT EXISTS (
+		SELECT 1 FROM users u WHERE u.id = al.user_id
+	);
+
 	DELETE FROM admin_permissions ap
 	WHERE NOT EXISTS (
 		SELECT 1 FROM users u WHERE u.id = ap.user_id
@@ -407,6 +412,19 @@ BEGIN
 	  AND NOT EXISTS (
 		SELECT 1 FROM users u WHERE u.id = zs.updated_by_admin_id
 	  );
+
+	IF NOT EXISTS (
+		SELECT 1
+		FROM pg_constraint
+		WHERE conname = 'admin_api_audit_logs_user_id_fkey'
+	) THEN
+		ALTER TABLE admin_api_audit_logs
+			ADD CONSTRAINT admin_api_audit_logs_user_id_fkey
+			FOREIGN KEY (user_id)
+			REFERENCES users(id)
+			ON UPDATE CASCADE
+			ON DELETE CASCADE;
+	END IF;
 
 	IF NOT EXISTS (
 		SELECT 1

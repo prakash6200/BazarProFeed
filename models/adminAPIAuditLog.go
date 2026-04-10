@@ -9,6 +9,7 @@ import (
 type AdminAPIAuditLog struct {
 	ID         string         `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
 	UserID     string         `gorm:"type:uuid;index;not null" json:"user_id"`
+	User       *User          `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	Username   string         `gorm:"type:text;index;not null" json:"username"`
 	Role       string         `gorm:"type:user_role;index;not null" json:"role"`
 	Method     string         `gorm:"type:text;index;not null" json:"method"`
