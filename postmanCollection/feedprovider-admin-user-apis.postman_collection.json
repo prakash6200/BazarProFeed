@@ -245,6 +245,72 @@
             "description": "Fetch candle-wise tick list for last 24 hours from stored ticks.\nBody:\n- exchange: optional\n- symbol: optional\n- interval: 1m | 5m | 15m\n- page: positive integer\n- sizePerPage: max 500\nResponse returns candle_ticks[], where each candle includes all ticks in that interval bucket."
           },
           "response": []
+        },
+        {
+          "name": "Zerodha Candles (Last 24h)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"NSE\",\n  \"symbol\": \"NIFTY\",\n  \"interval\": \"1m\",\n  \"page\": 1,\n  \"sizePerPage\": 50\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/zerodha/candles",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "zerodha",
+                "candles"
+              ]
+            },
+            "description": "Fetch Zerodha OHLC candles for last 24 hours from stored ticks.\nBody:\n- exchange: optional\n- symbol: optional\n- interval: 1m | 5m | 15m\n- page: positive integer\n- sizePerPage: max 200"
+          },
+          "response": []
+        },
+        {
+          "name": "Zerodha Candle Ticks (Last 24h)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"NSE\",\n  \"symbol\": \"NIFTY\",\n  \"interval\": \"1m\",\n  \"page\": 1,\n  \"sizePerPage\": 50\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/zerodha/ticks",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "zerodha",
+                "ticks"
+              ]
+            },
+            "description": "Fetch Zerodha candle-wise tick list for last 24 hours from stored ticks.\nBody:\n- exchange: optional\n- symbol: optional\n- interval: 1m | 5m | 15m\n- page: positive integer\n- sizePerPage: max 500\nResponse returns candle_ticks[], where each candle includes all ticks in that interval bucket."
+          },
+          "response": []
         }
       ]
     },

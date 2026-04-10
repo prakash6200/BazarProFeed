@@ -30,6 +30,13 @@ func NewRedisTickCache(client *redis.Client) *RedisTickCache {
 	return &RedisTickCache{client: client}
 }
 
+func (c *RedisTickCache) Client() *redis.Client {
+	if c == nil {
+		return nil
+	}
+	return c.client
+}
+
 // Set stores a tick in Redis. The key is prefix+SYMBOL, TTL is 24 h.
 func (c *RedisTickCache) Set(ctx context.Context, prefix string, tick NormalizedTick) {
 	if c == nil || c.client == nil || tick.Symbol == "" {

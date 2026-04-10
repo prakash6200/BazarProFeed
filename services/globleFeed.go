@@ -29,6 +29,7 @@ type GlobalMarketFeedService struct {
 	wsURL   string
 	apiKey  string
 	db      *gorm.DB
+	events  TickEventEnqueuer[models.GlobalTickEvent]
 	conn    *websocket.Conn
 	writeMu sync.Mutex
 	ctx     context.Context
@@ -91,6 +92,29 @@ func NewGlobalMarketFeedService(db *gorm.DB, redisCache *RedisTickCache) *Global
 		subscribed:  make(map[string]struct{}),
 		recentBySym: make(map[string][]NormalizedTick),
 	}
+	if db != nil {
+		flushFn := func(items []models.GlobalTickEvent) error {
+			return models.CreateGlobalTickEventsBatch(db, items, tickEventBatchSize)
+		}
+		if redisCache != nil && redisCache.Client() != nil {
+			svc.events = NewRedisTickEventBatcher(
+				"global_tick_events",
+				"feed:queue:global_tick_events",
+				redisCache.Client(),
+				tickEventFlushInterval,
+				tickEventBatchSize,
+				flushFn,
+			)
+		} else {
+			svc.events = NewTickEventBatcher(
+				"global_tick_events",
+				tickEventFlushInterval,
+				tickEventBatchSize,
+				tickEventQueueSize,
+				flushFn,
+			)
+		}
+	}
 	if redisCache != nil {
 		ticks := redisCache.Snapshot(context.Background(), GlobalTickPrefix, "")
 		for _, tick := range ticks {
@@ -107,6 +131,9 @@ func NewGlobalMarketFeedService(db *gorm.DB, redisCache *RedisTickCache) *Global
 func (g *GlobalMarketFeedService) Start(ctx context.Context, tickHub *TickHub) {
 	g.ctx, g.cancel = context.WithCancel(ctx)
 	g.tickHub = tickHub
+	if g.events != nil {
+		g.events.Start(g.ctx)
+	}
 	if g.wsURL == "" {
 		log.Printf("global market feed: GLOBAL_MARKET_WS_URL is not configured")
 		return
@@ -275,11 +302,15 @@ func (g *GlobalMarketFeedService) readLoop(tickHub *TickHub) {
 		}
 		updated := g.marketState.Update(tick)
 		updated.MarketStatus = MarketStatusOpen
-		if g.db != nil {
+		if g.db != nil && g.events != nil {
 			if payload, err := json.Marshal(updated); err == nil {
-				if err := models.CreateGlobalTickEvent(g.db, updated.Exchange, updated.Symbol, updated.LTP, updated.Timestamp, payload); err != nil {
-					log.Printf("global market feed: failed to persist tick event symbol=%s err=%v", updated.Symbol, err)
-				}
+				g.events.Enqueue(models.GlobalTickEvent{
+					Exchange: updated.Exchange,
+					Symbol:   updated.Symbol,
+					LTP:      updated.LTP,
+					TickTime: updated.Timestamp,
+					Payload:  payload,
+				})
 			}
 		}
 		g.lastInboundTickAt.Store(time.Now().UnixNano())

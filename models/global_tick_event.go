@@ -57,6 +57,32 @@ func CreateGlobalTickEvent(db *gorm.DB, exchange, symbol string, ltp float64, ti
 	return db.Create(&event).Error
 }
 
+func CreateGlobalTickEventsBatch(db *gorm.DB, events []GlobalTickEvent, batchSize int) error {
+	if db == nil || len(events) == 0 {
+		return nil
+	}
+	if batchSize <= 0 {
+		batchSize = 200
+	}
+
+	filtered := make([]GlobalTickEvent, 0, len(events))
+	for _, event := range events {
+		if len(event.Payload) == 0 {
+			continue
+		}
+		event.Exchange = strings.ToUpper(strings.TrimSpace(event.Exchange))
+		event.Symbol = strings.ToUpper(strings.TrimSpace(event.Symbol))
+		event.TickTime = event.TickTime.UTC()
+		filtered = append(filtered, event)
+	}
+
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	return db.CreateInBatches(filtered, batchSize).Error
+}
+
 func ListGlobalTickEventsLast24h(db *gorm.DB, page, sizePerPage int, filters GlobalTickQueryFilters) ([]json.RawMessage, int64, error) {
 	if page < 1 {
 		page = 1

@@ -198,6 +198,7 @@ type ZerodhaFeedService struct {
 	httpClient  *http.Client
 	baseCtx     context.Context
 	redisCache  *RedisTickCache
+	events      TickEventEnqueuer[models.ZerodhaTickEvent]
 
 	running atomic.Bool
 	tokenMu sync.RWMutex
@@ -227,6 +228,29 @@ func NewZerodhaFeedService(cfg config.ZerodhaConfig, db *gorm.DB, tickHub *TickH
 		state:          connectionStateDisconnected,
 		redisCache:     redisCache,
 		circuitByToken: make(map[int64]zerodhaCircuitLimit),
+	}
+	if db != nil {
+		flushFn := func(items []models.ZerodhaTickEvent) error {
+			return models.CreateZerodhaTickEventsBatch(db, items, tickEventBatchSize)
+		}
+		if redisCache != nil && redisCache.Client() != nil {
+			service.events = NewRedisTickEventBatcher(
+				"zerodha_tick_events",
+				"feed:queue:zerodha_tick_events",
+				redisCache.Client(),
+				tickEventFlushInterval,
+				tickEventBatchSize,
+				flushFn,
+			)
+		} else {
+			service.events = NewTickEventBatcher(
+				"zerodha_tick_events",
+				tickEventFlushInterval,
+				tickEventBatchSize,
+				tickEventQueueSize,
+				flushFn,
+			)
+		}
 	}
 	service.seedRegistryFromDatabase()
 	service.loadAccessTokenFromDatabase()
@@ -303,6 +327,9 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 		if s.shouldExchangeRequestToken() {
 			if exchangeErr := s.ensureAccessTokenFromRequestToken(); exchangeErr == nil {
 				if revalidateErr := s.validateAccessToken(); revalidateErr == nil {
+					if s.events != nil {
+						s.events.Start(ctx)
+					}
 					go s.rebroadcastStaleStateLoop(ctx)
 					go s.circuitLimitRefreshLoop(ctx)
 					go s.runReconnectLoop(ctx)
@@ -313,6 +340,10 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 		s.handleAuthFailure(err)
 		s.running.Store(false)
 		return
+	}
+
+	if s.events != nil {
+		s.events.Start(ctx)
 	}
 
 	go s.rebroadcastStaleStateLoop(ctx)
@@ -1111,11 +1142,15 @@ func (s *ZerodhaFeedService) parseAndPublishTicks(payload []byte) {
 			}
 		}
 		updated.MarketStatus = MarketStatusOpen
-		if s.db != nil {
+		if s.db != nil && s.events != nil {
 			if payload, err := json.Marshal(updated); err == nil {
-				if err := models.CreateZerodhaTickEvent(s.db, updated.Exchange, updated.Symbol, updated.LTP, updated.Timestamp, payload); err != nil {
-					log.Printf("zerodha feed: failed to persist tick event symbol=%s err=%v", updated.Symbol, err)
-				}
+				s.events.Enqueue(models.ZerodhaTickEvent{
+					Exchange: updated.Exchange,
+					Symbol:   updated.Symbol,
+					LTP:      updated.LTP,
+					TickTime: updated.Timestamp,
+					Payload:  payload,
+				})
 			}
 		}
 		s.lastInboundTickAt.Store(time.Now().UnixNano())

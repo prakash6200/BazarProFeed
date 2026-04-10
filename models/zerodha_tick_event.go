@@ -57,6 +57,32 @@ func CreateZerodhaTickEvent(db *gorm.DB, exchange, symbol string, ltp float64, t
 	return db.Create(&event).Error
 }
 
+func CreateZerodhaTickEventsBatch(db *gorm.DB, events []ZerodhaTickEvent, batchSize int) error {
+	if db == nil || len(events) == 0 {
+		return nil
+	}
+	if batchSize <= 0 {
+		batchSize = 200
+	}
+
+	filtered := make([]ZerodhaTickEvent, 0, len(events))
+	for _, event := range events {
+		if len(event.Payload) == 0 {
+			continue
+		}
+		event.Exchange = strings.ToUpper(strings.TrimSpace(event.Exchange))
+		event.Symbol = strings.ToUpper(strings.TrimSpace(event.Symbol))
+		event.TickTime = event.TickTime.UTC()
+		filtered = append(filtered, event)
+	}
+
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	return db.CreateInBatches(filtered, batchSize).Error
+}
+
 func ListZerodhaCandlesLast24h(db *gorm.DB, intervalMinutes, page, sizePerPage int, filters ZerodhaTickQueryFilters) ([]ZerodhaCandleRow, int64, error) {
 	if page < 1 {
 		page = 1
