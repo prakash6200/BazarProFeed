@@ -457,6 +457,40 @@ $$;`
 	return db.Exec(ensureFKSQL).Error
 }
 
+func ensureTimescaleHypertables(db *gorm.DB) {
+	if err := db.Exec(`CREATE EXTENSION IF NOT EXISTS timescaledb;`).Error; err != nil {
+		log.Printf("timescaledb extension not available, continuing without hypertables: %v", err)
+		return
+	}
+
+	for _, table := range []string{"global_tick_events", "zerodha_tick_events"} {
+		sql := fmt.Sprintf(`
+DO $$
+BEGIN
+	IF EXISTS (
+		SELECT 1
+		FROM information_schema.tables
+		WHERE table_schema = 'public'
+		  AND table_name = '%s'
+	) THEN
+		EXECUTE 'ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s_pkey';
+
+		PERFORM create_hypertable('%s', 'created_at', if_not_exists => TRUE, migrate_data => TRUE, chunk_time_interval => INTERVAL ''1 day'');
+
+		EXECUTE 'CREATE INDEX IF NOT EXISTS idx_%s_created_at_desc ON %s (created_at DESC)';
+		EXECUTE 'CREATE INDEX IF NOT EXISTS idx_%s_exchange_symbol_created_at ON %s (exchange, symbol, created_at DESC)';
+		EXECUTE 'CREATE INDEX IF NOT EXISTS idx_%s_symbol_created_at ON %s (symbol, created_at DESC)';
+		EXECUTE 'CREATE INDEX IF NOT EXISTS idx_%s_tick_time_desc ON %s (tick_time DESC)';
+	END IF;
+END
+$$;`, table, table, table, table, table, table, table, table, table, table, table, table)
+
+		if err := db.Exec(sql).Error; err != nil {
+			log.Printf("failed to configure timescaledb hypertable for %s: %v", table, err)
+		}
+	}
+}
+
 func ConnectDatabase() {
 	dbMu.Lock()
 	defer dbMu.Unlock()
@@ -507,6 +541,7 @@ func ConnectDatabase() {
 		&models.AdminPermission{},
 		&models.AdminAPIAuditLog{},
 		&models.GlobalTickEvent{},
+		&models.ZerodhaTickEvent{},
 		&models.Instrument{},
 		&models.GlobalInstrument{},
 		&models.ZerodhaSession{},
@@ -537,6 +572,8 @@ ALTER TABLE admin_permissions
 		_ = sqlDB.Close()
 		log.Fatal("failed to ensure foreign keys: ", err)
 	}
+
+	ensureTimescaleHypertables(db)
 
 	if err := db.Exec(`
 UPDATE instruments

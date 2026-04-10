@@ -19,4 +19,6 @@ func RegisterUserRoutes(app *fiber.App, userController *controller.UserControlle
 	userRoutes.Post("/refresh-token", validator.ValidateRefreshToken, userController.RefreshToken)
 	userRoutes.Post("/global/candles", userController.GetGlobalCandles)
 	userRoutes.Post("/global/ticks", userController.GetGlobalRawTicks)
+	userRoutes.Post("/zerodha/candles", userController.GetZerodhaCandles)
+	userRoutes.Post("/zerodha/ticks", userController.GetZerodhaRawTicks)
 }

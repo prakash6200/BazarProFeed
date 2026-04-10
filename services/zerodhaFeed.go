@@ -1111,6 +1111,13 @@ func (s *ZerodhaFeedService) parseAndPublishTicks(payload []byte) {
 			}
 		}
 		updated.MarketStatus = MarketStatusOpen
+		if s.db != nil {
+			if payload, err := json.Marshal(updated); err == nil {
+				if err := models.CreateZerodhaTickEvent(s.db, updated.Exchange, updated.Symbol, updated.LTP, updated.Timestamp, payload); err != nil {
+					log.Printf("zerodha feed: failed to persist tick event symbol=%s err=%v", updated.Symbol, err)
+				}
+			}
+		}
 		s.lastInboundTickAt.Store(time.Now().UnixNano())
 		if s.tickHub != nil {
 			s.tickHub.Publish(updated)

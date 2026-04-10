@@ -34,6 +34,22 @@ type GlobalRawTicksRequest struct {
 	SizePerPage int    `json:"sizePerPage"`
 }
 
+type ZerodhaCandlesRequest struct {
+	Exchange    string `json:"exchange"`
+	Symbol      string `json:"symbol"`
+	Interval    string `json:"interval"`
+	Page        int    `json:"page"`
+	SizePerPage int    `json:"sizePerPage"`
+}
+
+type ZerodhaRawTicksRequest struct {
+	Exchange    string `json:"exchange"`
+	Symbol      string `json:"symbol"`
+	Interval    string `json:"interval"`
+	Page        int    `json:"page"`
+	SizePerPage int    `json:"sizePerPage"`
+}
+
 func NewUserController(db *gorm.DB, socketHub *config.SocketHub) *UserController {
 	return &UserController{
 		db:        db,
@@ -374,6 +390,156 @@ func (uc *UserController) GetGlobalRawTicks(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status_code":  fiber.StatusOK,
 		"message":      "global candle ticks fetched successfully",
+		"candle_ticks": candleTicks,
+		"pagination": fiber.Map{
+			"page":         req.Page,
+			"sizePerPage":  req.SizePerPage,
+			"totalRecords": total,
+			"totalPages":   totalPages,
+			"interval":     interval,
+			"duration":     "24h",
+		},
+	})
+}
+
+func (uc *UserController) GetZerodhaCandles(c *fiber.Ctx) error {
+	var req ZerodhaCandlesRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
+			"error":       "invalid request body",
+		})
+	}
+
+	interval := strings.ToLower(strings.TrimSpace(req.Interval))
+	intervalMinutes := 1
+	switch interval {
+	case "", "1m":
+		interval = "1m"
+		intervalMinutes = 1
+	case "5m":
+		intervalMinutes = 5
+	case "15m":
+		intervalMinutes = 15
+	default:
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "interval must be one of: 1m, 5m, 15m",
+			"error":       "interval must be one of: 1m, 5m, 15m",
+		})
+	}
+
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.SizePerPage <= 0 {
+		req.SizePerPage = 20
+	}
+	if req.SizePerPage > 200 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "sizePerPage must be less than or equal to 200",
+			"error":       "sizePerPage must be less than or equal to 200",
+		})
+	}
+
+	rows, total, err := models.ListZerodhaCandlesLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.ZerodhaTickQueryFilters{
+		Exchange: req.Exchange,
+		Symbol:   req.Symbol,
+	})
+	if err != nil {
+		log.Printf("error fetching zerodha candles: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch zerodha candles",
+			"error":       "failed to fetch zerodha candles",
+		})
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(req.SizePerPage) - 1) / int64(req.SizePerPage))
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"message":     "zerodha candles fetched successfully",
+		"candles":     rows,
+		"pagination": fiber.Map{
+			"page":         req.Page,
+			"sizePerPage":  req.SizePerPage,
+			"totalRecords": total,
+			"totalPages":   totalPages,
+			"interval":     interval,
+			"duration":     "24h",
+		},
+	})
+}
+
+func (uc *UserController) GetZerodhaRawTicks(c *fiber.Ctx) error {
+	var req ZerodhaRawTicksRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
+			"error":       "invalid request body",
+		})
+	}
+
+	interval := strings.ToLower(strings.TrimSpace(req.Interval))
+	intervalMinutes := 1
+	switch interval {
+	case "", "1m":
+		interval = "1m"
+		intervalMinutes = 1
+	case "5m":
+		intervalMinutes = 5
+	case "15m":
+		intervalMinutes = 15
+	default:
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "interval must be one of: 1m, 5m, 15m",
+			"error":       "interval must be one of: 1m, 5m, 15m",
+		})
+	}
+
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.SizePerPage <= 0 {
+		req.SizePerPage = 50
+	}
+	if req.SizePerPage > 500 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "sizePerPage must be less than or equal to 500",
+			"error":       "sizePerPage must be less than or equal to 500",
+		})
+	}
+
+	candleTicks, total, err := models.ListZerodhaCandleTicksLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.ZerodhaTickQueryFilters{
+		Exchange: req.Exchange,
+		Symbol:   req.Symbol,
+	})
+	if err != nil {
+		log.Printf("error fetching zerodha candle ticks: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch zerodha candle ticks",
+			"error":       "failed to fetch zerodha candle ticks",
+		})
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(req.SizePerPage) - 1) / int64(req.SizePerPage))
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code":  fiber.StatusOK,
+		"message":      "zerodha candle ticks fetched successfully",
 		"candle_ticks": candleTicks,
 		"pagination": fiber.Map{
 			"page":         req.Page,
