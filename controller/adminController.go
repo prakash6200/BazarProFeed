@@ -7,7 +7,9 @@ import (
 	"feedprovider/models"
 	"feedprovider/validator"
 	"log"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
@@ -578,6 +580,127 @@ func (ac *AdminController) GetStats(c *fiber.Ctx) error {
 			"total_users":       totalUsers,
 			"active_users":      activeUsers,
 			"connected_clients": connectedClients,
+		},
+	})
+}
+
+func (ac *AdminController) GetActivityLogs(c *fiber.Ctx) error {
+	page := 1
+	if rawPage := strings.TrimSpace(c.Query("page")); rawPage != "" {
+		parsed, err := strconv.Atoi(rawPage)
+		if err != nil || parsed < 1 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "page must be a positive integer",
+				"error":       "page must be a positive integer",
+			})
+		}
+		page = parsed
+	}
+
+	limit := 20
+	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed < 1 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "limit must be a positive integer",
+				"error":       "limit must be a positive integer",
+			})
+		}
+		if parsed > 200 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "limit must be less than or equal to 200",
+				"error":       "limit must be less than or equal to 200",
+			})
+		}
+		limit = parsed
+	}
+
+	query := ac.db.Model(&models.AdminAPIAuditLog{})
+
+	if userID := strings.TrimSpace(c.Query("user_id")); userID != "" {
+		query = query.Where("user_id = ?", userID)
+	}
+	if role := strings.ToUpper(strings.TrimSpace(c.Query("role"))); role != "" {
+		query = query.Where("role = ?", role)
+	}
+	if method := strings.ToUpper(strings.TrimSpace(c.Query("method"))); method != "" {
+		query = query.Where("method = ?", method)
+	}
+	if path := strings.TrimSpace(c.Query("path")); path != "" {
+		query = query.Where("path ILIKE ?", "%"+path+"%")
+	}
+	if statusCodeRaw := strings.TrimSpace(c.Query("status_code")); statusCodeRaw != "" {
+		statusCode, err := strconv.Atoi(statusCodeRaw)
+		if err != nil || statusCode < 100 || statusCode > 599 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "status_code must be a valid HTTP status code",
+				"error":       "status_code must be a valid HTTP status code",
+			})
+		}
+		query = query.Where("status_code = ?", statusCode)
+	}
+
+	if from := strings.TrimSpace(c.Query("from")); from != "" {
+		parsedFrom, err := time.Parse(time.RFC3339, from)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "from must be in RFC3339 format",
+				"error":       "from must be in RFC3339 format",
+			})
+		}
+		query = query.Where("created_at >= ?", parsedFrom.UTC())
+	}
+
+	if to := strings.TrimSpace(c.Query("to")); to != "" {
+		parsedTo, err := time.Parse(time.RFC3339, to)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "to must be in RFC3339 format",
+				"error":       "to must be in RFC3339 format",
+			})
+		}
+		query = query.Where("created_at <= ?", parsedTo.UTC())
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch activity logs",
+			"error":       "failed to fetch activity logs",
+		})
+	}
+
+	offset := (page - 1) * limit
+	var logs []models.AdminAPIAuditLog
+	if err := query.Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch activity logs",
+			"error":       "failed to fetch activity logs",
+		})
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(limit) - 1) / int64(limit))
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"message":     "activity logs fetched successfully",
+		"logs":        logs,
+		"pagination": fiber.Map{
+			"page":          page,
+			"limit":         limit,
+			"total_records": total,
+			"total_pages":   totalPages,
 		},
 	})
 }

@@ -800,6 +800,68 @@
           "response": []
         },
         {
+          "name": "Get Activity Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/activity-logs?page=1&limit=20&method=GET&status_code=200",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "activity-logs"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "user_id",
+                  "value": "{{admin_user_id}}"
+                },
+                {
+                  "key": "role",
+                  "value": "ADMIN"
+                },
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/admin/users"
+                },
+                {
+                  "key": "status_code",
+                  "value": "200"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-04-10T00:00:00Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-04-10T23:59:59Z"
+                }
+              ]
+            },
+            "description": "Admin/Super-admin route (permission-based for ADMIN). Fetch admin activity logs with pagination and filters.\nQuery params:\n- page: positive integer (default 1)\n- limit: positive integer, max 200 (default 20)\n- user_id: UUID\n- role: ADMIN or SUPER_ADMIN\n- method: GET/POST/PUT/DELETE etc\n- path: partial path match\n- status_code: valid HTTP status code\n- from: RFC3339 timestamp\n- to: RFC3339 timestamp"
+          },
+          "response": []
+        },
+        {
           "name": "Get Admin Permissions",
           "request": {
             "method": "GET",

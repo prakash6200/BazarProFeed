@@ -17,6 +17,7 @@ const (
 	PermUsersChangePassword     = "users:change_password"
 	PermUsersLogout             = "users:logout"
 	PermAdminStatsRead          = "admin_stats:read"
+	PermActivityLogsRead        = "activity_logs:read"
 	PermInstrumentsImport       = "instruments:import"
 	PermInstrumentsRead         = "instruments:read"
 	PermInstrumentsCreate       = "instruments:create"
@@ -38,6 +39,7 @@ var DefaultAdminPermissions = []string{
 	PermUsersChangePassword,
 	PermUsersLogout,
 	PermAdminStatsRead,
+	PermActivityLogsRead,
 	PermInstrumentsImport,
 	PermInstrumentsRead,
 	PermInstrumentsCreate,
