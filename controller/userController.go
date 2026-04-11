@@ -301,9 +301,17 @@ func (uc *UserController) GetGlobalCandles(c *fiber.Ctx) error {
 		})
 	}
 
+	req.Symbol = strings.TrimSpace(req.Symbol)
+	if req.Symbol == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "symbol is required",
+			"error":       "symbol is required",
+		})
+	}
+
 	rows, total, err := models.ListGlobalCandlesLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.GlobalTickQueryFilters{
-		Exchange: req.Exchange,
-		Symbol:   req.Symbol,
+		Symbol: req.Symbol,
 	})
 	if err != nil {
 		log.Printf("error fetching global candles: %v", err)
@@ -366,15 +374,14 @@ func (uc *UserController) GetGlobalRawTicks(c *fiber.Ctx) error {
 		})
 	}
 
-	req.Exchange = strings.TrimSpace(req.Exchange)
 	req.Symbol = strings.TrimSpace(req.Symbol)
 	req.IntervalStart = strings.TrimSpace(req.IntervalStart)
 
-	if req.Exchange == "" || req.Symbol == "" || req.IntervalStart == "" {
+	if req.Symbol == "" || req.IntervalStart == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
-			"message":     "exchange, symbol and interval_start are required to fetch one candle ticks",
-			"error":       "exchange, symbol and interval_start are required to fetch one candle ticks",
+			"message":     "symbol and interval_start are required to fetch one candle ticks",
+			"error":       "symbol and interval_start are required to fetch one candle ticks",
 		})
 	}
 
@@ -398,7 +405,6 @@ func (uc *UserController) GetGlobalRawTicks(c *fiber.Ctx) error {
 	intervalEndPtr = &end
 
 	candleTicks, total, err := models.ListGlobalCandleTicksLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.GlobalTickQueryFilters{
-		Exchange:      req.Exchange,
 		Symbol:        req.Symbol,
 		IntervalStart: intervalStartPtr,
 		IntervalEnd:   intervalEndPtr,
@@ -475,9 +481,17 @@ func (uc *UserController) GetZerodhaCandles(c *fiber.Ctx) error {
 		})
 	}
 
+	req.Symbol = strings.TrimSpace(req.Symbol)
+	if req.Symbol == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "symbol is required",
+			"error":       "symbol is required",
+		})
+	}
+
 	rows, total, err := models.ListZerodhaCandlesLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.ZerodhaTickQueryFilters{
-		Exchange: req.Exchange,
-		Symbol:   req.Symbol,
+		Symbol: req.Symbol,
 	})
 	if err != nil {
 		log.Printf("error fetching zerodha candles: %v", err)
@@ -554,6 +568,15 @@ func (uc *UserController) GetZerodhaRawTicks(c *fiber.Ctx) error {
 		})
 	}
 
+	req.Symbol = strings.TrimSpace(req.Symbol)
+	if req.Symbol == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "symbol is required",
+			"error":       "symbol is required",
+		})
+	}
+
 	var intervalStartPtr *time.Time
 	var intervalEndPtr *time.Time
 	if strings.TrimSpace(req.IntervalStart) != "" {
@@ -572,7 +595,6 @@ func (uc *UserController) GetZerodhaRawTicks(c *fiber.Ctx) error {
 	}
 
 	candleTicks, total, err := models.ListZerodhaCandleTicksLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.ZerodhaTickQueryFilters{
-		Exchange:      req.Exchange,
 		Symbol:        req.Symbol,
 		IntervalStart: intervalStartPtr,
 		IntervalEnd:   intervalEndPtr,
