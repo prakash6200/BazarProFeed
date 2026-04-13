@@ -475,7 +475,7 @@ BEGIN
 	) THEN
 		EXECUTE 'ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s_pkey';
 
-		PERFORM create_hypertable('%s', 'created_at', if_not_exists => TRUE, migrate_data => TRUE, chunk_time_interval => INTERVAL ''1 day'');
+		PERFORM create_hypertable('%s', 'created_at', if_not_exists => TRUE, migrate_data => TRUE, chunk_time_interval => INTERVAL '1 day');
 
 		EXECUTE 'CREATE INDEX IF NOT EXISTS idx_%s_created_at_desc ON %s (created_at DESC)';
 		EXECUTE 'CREATE INDEX IF NOT EXISTS idx_%s_exchange_symbol_created_at ON %s (exchange, symbol, created_at DESC)';
