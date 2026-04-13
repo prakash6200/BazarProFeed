@@ -15,7 +15,7 @@ type ZerodhaTickEvent struct {
 	LTP       float64   `json:"ltp"`
 	TickTime  time.Time `gorm:"index" json:"tick_time"`
 	Payload   []byte    `gorm:"type:jsonb;not null" json:"payload"`
-	CreatedAt time.Time `gorm:"index" json:"created_at"`
+	CreatedAt time.Time `gorm:"not null;index" json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
