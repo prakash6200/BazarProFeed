@@ -491,6 +491,33 @@ $$;`, table, table, table, table, table, table, table, table, table, table, tabl
 	}
 }
 
+func ensureTickEventIndexes(db *gorm.DB) {
+	for _, table := range []string{"global_tick_events", "zerodha_tick_events"} {
+		sql := fmt.Sprintf(`
+DO $$
+BEGIN
+	IF EXISTS (
+		SELECT 1
+		FROM information_schema.tables
+		WHERE table_schema = 'public'
+		  AND table_name = '%s'
+	) THEN
+		EXECUTE 'CREATE INDEX IF NOT EXISTS idx_%s_created_at_desc ON %s (created_at DESC)';
+		EXECUTE 'CREATE INDEX IF NOT EXISTS idx_%s_exchange_symbol_created_at ON %s (exchange, symbol, created_at DESC)';
+		EXECUTE 'CREATE INDEX IF NOT EXISTS idx_%s_symbol_created_at ON %s (symbol, created_at DESC)';
+		EXECUTE 'CREATE INDEX IF NOT EXISTS idx_%s_tick_time_desc ON %s (tick_time DESC)';
+		EXECUTE 'CREATE INDEX IF NOT EXISTS idx_%s_symbol_effective_tick_time ON %s (symbol, (CASE WHEN tick_time IS NULL OR tick_time <= ''1970-01-01''::timestamp THEN created_at ELSE tick_time END) DESC)';
+		EXECUTE 'CREATE INDEX IF NOT EXISTS idx_%s_exchange_symbol_effective_tick_time ON %s (exchange, symbol, (CASE WHEN tick_time IS NULL OR tick_time <= ''1970-01-01''::timestamp THEN created_at ELSE tick_time END) DESC)';
+	END IF;
+END
+$$;`, table, table, table, table, table, table, table, table, table, table, table, table, table)
+
+		if err := db.Exec(sql).Error; err != nil {
+			log.Printf("failed to ensure analytic indexes for %s: %v", table, err)
+		}
+	}
+}
+
 func ConnectDatabase() {
 	dbMu.Lock()
 	defer dbMu.Unlock()
@@ -574,6 +601,7 @@ ALTER TABLE admin_permissions
 	}
 
 	ensureTimescaleHypertables(db)
+	ensureTickEventIndexes(db)
 
 	if err := db.Exec(`
 UPDATE instruments

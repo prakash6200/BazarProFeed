@@ -249,6 +249,53 @@ func ListGlobalCandleTicksLast24h(db *gorm.DB, intervalMinutes, page, sizePerPag
 		args = append(args, filters.IntervalEnd.UTC())
 	}
 
+	if filters.IntervalStart != nil && filters.IntervalEnd != nil {
+		type directRow struct {
+			Exchange  string `gorm:"column:exchange"`
+			Symbol    string `gorm:"column:symbol"`
+			TickCount int64  `gorm:"column:tick_count"`
+			TicksRaw  []byte `gorm:"column:ticks"`
+		}
+
+		directSQL := `
+		WITH filtered AS (
+			SELECT exchange, symbol, payload,
+				CASE
+					WHEN tick_time IS NULL OR tick_time <= '1970-01-01'::timestamp THEN created_at
+					ELSE tick_time
+				END AS tick_ts
+			FROM global_tick_events
+			` + whereSQL + `
+		)
+		SELECT
+			MAX(exchange) AS exchange,
+			MAX(symbol) AS symbol,
+			COUNT(*) AS tick_count,
+			COALESCE(jsonb_agg(payload ORDER BY tick_ts ASC), '[]'::jsonb) AS ticks
+		FROM filtered`
+
+		var row directRow
+		if err := db.Raw(directSQL, args...).Scan(&row).Error; err != nil {
+			return nil, 0, err
+		}
+		if row.TickCount == 0 {
+			return nil, 0, nil
+		}
+
+		var ticks []json.RawMessage
+		if len(row.TicksRaw) > 0 {
+			_ = json.Unmarshal(row.TicksRaw, &ticks)
+		}
+
+		return []GlobalCandleTicksRow{{
+			Exchange:      row.Exchange,
+			Symbol:        row.Symbol,
+			IntervalStart: filters.IntervalStart.UTC(),
+			TickCount:     row.TickCount,
+			Ticks:         ticks,
+		}}, 1, nil
+	}
+
 	bucketExpr := "date_trunc('hour', tick_ts) + floor(date_part('minute', tick_ts) / ?) * make_interval(mins => ?)"
 
 	countSQL := `
