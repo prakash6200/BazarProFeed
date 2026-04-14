@@ -17,21 +17,23 @@ var allowedGlobalInstrumentStatuses = map[string]struct{}{
 }
 
 var allowedGlobalInstrumentSegments = map[string]struct{}{
-	models.GlobalInstrumentSegmentOthers:  {},
-	models.GlobalInstrumentSegmentUSStock: {},
-	models.GlobalInstrumentSegmentComex:   {},
-	models.GlobalInstrumentSegmentCrypto:  {},
-	models.GlobalInstrumentSegmentForex:   {},
-	models.GlobalInstrumentSegmentGift:    {},
+	models.GlobalInstrumentSegmentOthers:    {},
+	models.GlobalInstrumentSegmentUSStock:   {},
+	models.GlobalInstrumentSegmentComexFut:  {},
+	models.GlobalInstrumentSegmentComexSpot: {},
+	models.GlobalInstrumentSegmentCrypto:    {},
+	models.GlobalInstrumentSegmentForex:     {},
+	models.GlobalInstrumentSegmentGift:      {},
 }
 
 var allowedGlobalInstrumentExchanges = map[string]struct{}{
-	models.GlobalInstrumentExchangeOthers:  {},
-	models.GlobalInstrumentExchangeUSStock: {},
-	models.GlobalInstrumentExchangeComex:   {},
-	models.GlobalInstrumentExchangeCrypto:  {},
-	models.GlobalInstrumentExchangeForex:   {},
-	models.GlobalInstrumentExchangeGift:    {},
+	models.GlobalInstrumentExchangeOthers:    {},
+	models.GlobalInstrumentExchangeUSStock:   {},
+	models.GlobalInstrumentExchangeComexFut:  {},
+	models.GlobalInstrumentExchangeComexSpot: {},
+	models.GlobalInstrumentExchangeCrypto:    {},
+	models.GlobalInstrumentExchangeForex:     {},
+	models.GlobalInstrumentExchangeGift:      {},
 }
 
 func normalizeGlobalInstrumentStatus(value string) string {
@@ -62,10 +64,10 @@ func ValidateGlobalInstrument(inst *models.GlobalInstrument) error {
 		return errors.New("status must be ACTIVE or INACTIVE")
 	}
 	if _, ok := allowedGlobalInstrumentSegments[inst.Segment]; !ok {
-		return errors.New("segment must be one of: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT")
+		return errors.New("segment must be one of: OTHERS, USSTOCK, COMEX-FUT, COMEX-SPOT, CRYPTO, FOREX, GIFT")
 	}
 	if _, ok := allowedGlobalInstrumentExchanges[inst.Exchange]; !ok {
-		return errors.New("exchange must be one of: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT")
+		return errors.New("exchange must be one of: OTHERS, USSTOCK, COMEX-FUT, COMEX-SPOT, CRYPTO, FOREX, GIFT")
 	}
 	return nil
 }
@@ -173,8 +175,8 @@ func ValidateListGlobalInstrumentsQuery(c *fiber.Ctx) error {
 		if _, ok := allowedGlobalInstrumentSegments[segment]; !ok {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"status_code": fiber.StatusBadRequest,
-				"message":     "segment must be one of: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT",
-				"error":       "segment must be one of: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT",
+				"message":     "segment must be one of: OTHERS, USSTOCK, COMEX-FUT, COMEX-SPOT, CRYPTO, FOREX, GIFT",
+				"error":       "segment must be one of: OTHERS, USSTOCK, COMEX-FUT, COMEX-SPOT, CRYPTO, FOREX, GIFT",
 			})
 		}
 	}
@@ -185,8 +187,8 @@ func ValidateListGlobalInstrumentsQuery(c *fiber.Ctx) error {
 		if _, ok := allowedGlobalInstrumentExchanges[exchange]; !ok {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"status_code": fiber.StatusBadRequest,
-				"message":     "exchange must be one of: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT",
-				"error":       "exchange must be one of: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT",
+				"message":     "exchange must be one of: OTHERS, USSTOCK, COMEX-FUT, COMEX-SPOT, CRYPTO, FOREX, GIFT",
+				"error":       "exchange must be one of: OTHERS, USSTOCK, COMEX-FUT, COMEX-SPOT, CRYPTO, FOREX, GIFT",
 			})
 		}
 	}

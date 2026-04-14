@@ -342,7 +342,7 @@
                 { "key": "sort_order", "value": "asc" }
               ]
             },
-            "description": "Admin/Super-admin paginated list of global instruments (permission-based for ADMIN).\nQuery params:\n- page: positive integer (default 1)\n- limit: positive integer, max 5000 (default 20)\n- include_deleted: true or false (default false)\n- status: ACTIVE, INACTIVE\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- instrument_type: free text (usually SPOT/FUT/OPT)\n- expiry: YYYY-MM-DD, DD-MM-YYYY, DD-MM-YY, or RFC3339\n- search: partial match on symbol, subscribe_symbol_name, tradingsymbol, name\n- sort_by: any allowed global instrument column\n- sort_order: asc or desc\n\nResponse includes status_code, message, instruments, pagination."
+            "description": "Admin/Super-admin paginated list of global instruments (permission-based for ADMIN).\nQuery params:\n- page: positive integer (default 1)\n- limit: positive integer, max 5000 (default 20)\n- include_deleted: true or false (default false)\n- status: ACTIVE, INACTIVE\n- segment: OTHERS, USSTOCK, COMEX-FUT, COMEX-SPOT, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX-FUT, COMEX-SPOT, CRYPTO, FOREX, GIFT\n- instrument_type: free text (usually SPOT/FUT/OPT)\n- expiry: YYYY-MM-DD, DD-MM-YYYY, DD-MM-YY, or RFC3339\n- search: partial match on symbol, subscribe_symbol_name, tradingsymbol, name\n- sort_by: any allowed global instrument column\n- sort_order: asc or desc\n\nResponse includes status_code, message, instruments, pagination."
           }
         },
         {
@@ -397,7 +397,7 @@
               "host": ["{{base_url}}"],
               "path": ["admin", "global-instruments"]
             },
-            "description": "Admin/Super-admin route. Create a new global instrument.\nBody params:\n- instrument_token: int64\n- exchange_token: int64\n- tradingsymbol: string\n- name: string\n- subscribe_symbol_name: string\n- symbol: optional, auto-derived from subscribe_symbol_name then tradingsymbol\n- last_price: number\n- expiry: dd-mm-yy or empty string\n- tick_size: number\n- lot_size: integer\n- instrument_type: free text (usually SPOT/FUT/OPT)\n- strike: number\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- status: ACTIVE, INACTIVE"
+            "description": "Admin/Super-admin route. Create a new global instrument.\nBody params:\n- instrument_token: int64\n- exchange_token: int64\n- tradingsymbol: string\n- name: string\n- subscribe_symbol_name: string\n- symbol: optional, auto-derived from subscribe_symbol_name then tradingsymbol\n- last_price: number\n- expiry: dd-mm-yy or empty string\n- tick_size: number\n- lot_size: integer\n- instrument_type: free text (usually SPOT/FUT/OPT)\n- strike: number\n- segment: OTHERS, USSTOCK, COMEX-FUT, COMEX-SPOT, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX-FUT, COMEX-SPOT, CRYPTO, FOREX, GIFT\n- status: ACTIVE, INACTIVE"
           }
         },
         {
@@ -417,7 +417,7 @@
               "host": ["{{base_url}}"],
               "path": ["admin", "global-instruments", "{{global_instrument_id}}"]
             },
-            "description": "Admin/Super-admin route. Update, soft delete, or undelete global instrument by ID.\nAccepted fields are same as Create Global Instrument body.\nEnum values:\n- segment: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX, CRYPTO, FOREX, GIFT\n- status: ACTIVE, INACTIVE\nExpiry format when provided: dd-mm-yy or empty string.\nSoft delete controls:\n- is_deleted: true (delete), false (undelete)"
+            "description": "Admin/Super-admin route. Update, soft delete, or undelete global instrument by ID.\nAccepted fields are same as Create Global Instrument body.\nEnum values:\n- segment: OTHERS, USSTOCK, COMEX-FUT, COMEX-SPOT, CRYPTO, FOREX, GIFT\n- exchange: OTHERS, USSTOCK, COMEX-FUT, COMEX-SPOT, CRYPTO, FOREX, GIFT\n- status: ACTIVE, INACTIVE\nExpiry format when provided: dd-mm-yy or empty string.\nSoft delete controls:\n- is_deleted: true (delete), false (undelete)"
           }
         },
         {

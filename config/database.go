@@ -54,10 +54,14 @@ BEGIN
 	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'global_market_segment') THEN
 		CREATE TYPE global_market_segment AS ENUM ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
 	END IF;
+	ALTER TYPE global_market_segment ADD VALUE IF NOT EXISTS 'COMEX-FUT';
+	ALTER TYPE global_market_segment ADD VALUE IF NOT EXISTS 'COMEX-SPOT';
 
 	IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'global_market_exchange') THEN
 		CREATE TYPE global_market_exchange AS ENUM ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
 	END IF;
+	ALTER TYPE global_market_exchange ADD VALUE IF NOT EXISTS 'COMEX-FUT';
+	ALTER TYPE global_market_exchange ADD VALUE IF NOT EXISTS 'COMEX-SPOT';
 END
 $$;`
 
@@ -325,13 +329,23 @@ BEGIN
 		LIMIT 1;
 
 		IF segment_udt = 'global_market_segment' THEN
+			-- Migrate old COMEX value to COMEX-FUT
+			UPDATE global_instruments
+			SET segment = 'COMEX-FUT'::global_market_segment
+			WHERE UPPER(segment::text) = 'COMEX';
+			
 			UPDATE global_instruments
 			SET segment = 'OTHERS'::global_market_segment
-			WHERE segment IS NULL OR UPPER(segment::text) NOT IN ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
+			WHERE segment IS NULL OR UPPER(segment::text) NOT IN ('OTHERS', 'USSTOCK', 'COMEX-FUT', 'COMEX-SPOT', 'CRYPTO', 'FOREX', 'GIFT');
 		ELSE
+			-- Migrate old COMEX value to COMEX-FUT
+			UPDATE global_instruments
+			SET segment = 'COMEX-FUT'
+			WHERE UPPER(TRIM(segment::text)) = 'COMEX';
+			
 			UPDATE global_instruments
 			SET segment = 'OTHERS'
-			WHERE segment IS NULL OR UPPER(TRIM(segment::text)) NOT IN ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
+			WHERE segment IS NULL OR UPPER(TRIM(segment::text)) NOT IN ('OTHERS', 'USSTOCK', 'COMEX-FUT', 'COMEX-SPOT', 'CRYPTO', 'FOREX', 'GIFT');
 
 			ALTER TABLE global_instruments
 				ALTER COLUMN segment DROP DEFAULT;
@@ -364,13 +378,23 @@ BEGIN
 		LIMIT 1;
 
 		IF exchange_udt = 'global_market_exchange' THEN
+			-- Migrate old COMEX value to COMEX-FUT
+			UPDATE global_instruments
+			SET exchange = 'COMEX-FUT'::global_market_exchange
+			WHERE UPPER(exchange::text) = 'COMEX';
+			
 			UPDATE global_instruments
 			SET exchange = 'OTHERS'::global_market_exchange
-			WHERE exchange IS NULL OR UPPER(exchange::text) NOT IN ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
+			WHERE exchange IS NULL OR UPPER(exchange::text) NOT IN ('OTHERS', 'USSTOCK', 'COMEX-FUT', 'COMEX-SPOT', 'CRYPTO', 'FOREX', 'GIFT');
 		ELSE
+			-- Migrate old COMEX value to COMEX-FUT
+			UPDATE global_instruments
+			SET exchange = 'COMEX-FUT'
+			WHERE UPPER(TRIM(exchange::text)) = 'COMEX';
+			
 			UPDATE global_instruments
 			SET exchange = 'OTHERS'
-			WHERE exchange IS NULL OR UPPER(TRIM(exchange::text)) NOT IN ('OTHERS', 'USSTOCK', 'COMEX', 'CRYPTO', 'FOREX', 'GIFT');
+			WHERE exchange IS NULL OR UPPER(TRIM(exchange::text)) NOT IN ('OTHERS', 'USSTOCK', 'COMEX-FUT', 'COMEX-SPOT', 'CRYPTO', 'FOREX', 'GIFT');
 
 			ALTER TABLE global_instruments
 				ALTER COLUMN exchange DROP DEFAULT;

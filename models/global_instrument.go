@@ -42,19 +42,21 @@ const (
 	GlobalInstrumentStatusActive   = "ACTIVE"
 	GlobalInstrumentStatusInactive = "INACTIVE"
 
-	GlobalInstrumentSegmentOthers  = "OTHERS"
-	GlobalInstrumentSegmentUSStock = "USSTOCK"
-	GlobalInstrumentSegmentComex   = "COMEX"
-	GlobalInstrumentSegmentCrypto  = "CRYPTO"
-	GlobalInstrumentSegmentForex   = "FOREX"
-	GlobalInstrumentSegmentGift    = "GIFT"
+	GlobalInstrumentSegmentOthers    = "OTHERS"
+	GlobalInstrumentSegmentUSStock   = "USSTOCK"
+	GlobalInstrumentSegmentComexFut  = "COMEX-FUT"
+	GlobalInstrumentSegmentComexSpot = "COMEX-SPOT"
+	GlobalInstrumentSegmentCrypto    = "CRYPTO"
+	GlobalInstrumentSegmentForex     = "FOREX"
+	GlobalInstrumentSegmentGift      = "GIFT"
 
-	GlobalInstrumentExchangeOthers  = "OTHERS"
-	GlobalInstrumentExchangeUSStock = "USSTOCK"
-	GlobalInstrumentExchangeComex   = "COMEX"
-	GlobalInstrumentExchangeCrypto  = "CRYPTO"
-	GlobalInstrumentExchangeForex   = "FOREX"
-	GlobalInstrumentExchangeGift    = "GIFT"
+	GlobalInstrumentExchangeOthers    = "OTHERS"
+	GlobalInstrumentExchangeUSStock   = "USSTOCK"
+	GlobalInstrumentExchangeComexFut  = "COMEX-FUT"
+	GlobalInstrumentExchangeComexSpot = "COMEX-SPOT"
+	GlobalInstrumentExchangeCrypto    = "CRYPTO"
+	GlobalInstrumentExchangeForex     = "FOREX"
+	GlobalInstrumentExchangeGift      = "GIFT"
 )
 
 func (i *GlobalInstrument) IsActive() bool {
@@ -496,7 +498,8 @@ func NormalizeGlobalInstrumentSegment(segment string) string {
 	trimmed := strings.ToUpper(strings.TrimSpace(segment))
 	switch trimmed {
 	case GlobalInstrumentSegmentUSStock,
-		GlobalInstrumentSegmentComex,
+		GlobalInstrumentSegmentComexFut,
+		GlobalInstrumentSegmentComexSpot,
 		GlobalInstrumentSegmentCrypto,
 		GlobalInstrumentSegmentForex,
 		GlobalInstrumentSegmentGift:
@@ -510,7 +513,8 @@ func NormalizeGlobalInstrumentExchange(exchange string) string {
 	trimmed := strings.ToUpper(strings.TrimSpace(exchange))
 	switch trimmed {
 	case GlobalInstrumentExchangeUSStock,
-		GlobalInstrumentExchangeComex,
+		GlobalInstrumentExchangeComexFut,
+		GlobalInstrumentExchangeComexSpot,
 		GlobalInstrumentExchangeCrypto,
 		GlobalInstrumentExchangeForex,
 		GlobalInstrumentExchangeGift:
