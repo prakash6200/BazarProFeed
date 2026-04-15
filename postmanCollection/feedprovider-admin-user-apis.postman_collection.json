@@ -213,6 +213,78 @@
           "response": []
         },
         {
+          "name": "List Global Instruments (User)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/global/instruments?page=1&limit=20&status=ACTIVE&segment=FOREX&exchange=FOREX&instrument_type=SPOT&search=GBP&sort_by=symbol&sort_order=asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "global",
+                "instruments"
+              ],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" },
+                { "key": "status", "value": "ACTIVE" },
+                { "key": "segment", "value": "FOREX" },
+                { "key": "exchange", "value": "FOREX" },
+                { "key": "instrument_type", "value": "SPOT" },
+                { "key": "search", "value": "GBP" },
+                { "key": "sort_by", "value": "symbol" },
+                { "key": "sort_order", "value": "asc" }
+              ]
+            },
+            "description": "User route. List global market instruments with pagination and filters.\nQuery params:\n- page, limit\n- status, segment, exchange, instrument_type\n- expiry, search\n- sort_by, sort_order"
+          },
+          "response": []
+        },
+        {
+          "name": "List Zerodha Instruments (User)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/zerodha/instruments?page=1&limit=20&status=ACTIVE&segment=NFO-FUT&exchange=NSE&instrument_type=FUT&search=NIFTY&sort_by=tradingsymbol&sort_order=asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "zerodha",
+                "instruments"
+              ],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" },
+                { "key": "status", "value": "ACTIVE" },
+                { "key": "segment", "value": "NFO-FUT" },
+                { "key": "exchange", "value": "NSE" },
+                { "key": "instrument_type", "value": "FUT" },
+                { "key": "search", "value": "NIFTY" },
+                { "key": "sort_by", "value": "tradingsymbol" },
+                { "key": "sort_order", "value": "asc" }
+              ]
+            },
+            "description": "User route. List Zerodha instruments with pagination and filters.\nQuery params:\n- page, limit\n- status, segment, exchange, instrument_type\n- expiry (dd-mm-yy), search\n- sort_by, sort_order"
+          },
+          "response": []
+        },
+        {
           "name": "Global Candles (Last 24h)",
           "request": {
             "method": "POST",

@@ -314,6 +314,108 @@ func (uc *UserController) ChangePassword(c *fiber.Ctx) error {
 	})
 }
 
+func (uc *UserController) GetZerodhaInstruments(c *fiber.Ctx) error {
+	query := c.Locals("validated_instrument_list_query").(validator.InstrumentListQueryRequest)
+	filters := models.InstrumentListFilters{
+		InstrumentType: query.InstrumentType,
+		Segment:        query.Segment,
+		Exchange:       query.Exchange,
+		Status:         query.Status,
+		ExpiryDate:     query.ExpiryDate,
+		Search:         query.Search,
+		SortBy:         query.SortBy,
+		SortOrder:      query.SortOrder,
+	}
+
+	instruments, total, err := models.GetInstrumentsPaginated(uc.db, query.Page, query.Limit, false, filters)
+	if err != nil {
+		log.Printf("error fetching paginated instruments for user: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch instruments",
+			"error":       "failed to fetch instruments",
+		})
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(query.Limit) - 1) / int64(query.Limit))
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"message":     "instruments fetched successfully",
+		"instruments": instruments,
+		"pagination": fiber.Map{
+			"page":          query.Page,
+			"limit":         query.Limit,
+			"total_records": total,
+			"total_pages":   totalPages,
+			"filters": fiber.Map{
+				"instrument_type": filters.InstrumentType,
+				"segment":         filters.Segment,
+				"exchange":        filters.Exchange,
+				"status":          filters.Status,
+				"expiry":          filters.ExpiryDate,
+				"search":          filters.Search,
+				"sort_by":         filters.SortBy,
+				"sort_order":      filters.SortOrder,
+			},
+		},
+	})
+}
+
+func (uc *UserController) GetGlobalInstruments(c *fiber.Ctx) error {
+	query := c.Locals("validated_global_instrument_list_query").(validator.GlobalInstrumentListQueryRequest)
+	filters := models.GlobalInstrumentListFilters{
+		Status:         query.Status,
+		Segment:        query.Segment,
+		Exchange:       query.Exchange,
+		InstrumentType: query.InstrumentType,
+		Expiry:         query.Expiry,
+		Search:         query.Search,
+		SortBy:         query.SortBy,
+		SortOrder:      query.SortOrder,
+	}
+
+	instruments, total, err := models.GetGlobalInstrumentsPaginated(uc.db, query.Page, query.Limit, false, filters)
+	if err != nil {
+		log.Printf("error fetching paginated global instruments for user: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch global instruments",
+			"error":       "failed to fetch global instruments",
+		})
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(query.Limit) - 1) / int64(query.Limit))
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"message":     "global instruments fetched successfully",
+		"instruments": instruments,
+		"pagination": fiber.Map{
+			"page":          query.Page,
+			"limit":         query.Limit,
+			"total_records": total,
+			"total_pages":   totalPages,
+			"filters": fiber.Map{
+				"status":          filters.Status,
+				"segment":         filters.Segment,
+				"exchange":        filters.Exchange,
+				"instrument_type": filters.InstrumentType,
+				"expiry":          filters.Expiry,
+				"search":          filters.Search,
+				"sort_by":         filters.SortBy,
+				"sort_order":      filters.SortOrder,
+			},
+		},
+	})
+}
+
 func (uc *UserController) GetGlobalCandles(c *fiber.Ctx) error {
 	var req GlobalCandlesRequest
 	if err := c.BodyParser(&req); err != nil {
