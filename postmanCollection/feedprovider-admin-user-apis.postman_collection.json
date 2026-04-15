@@ -181,6 +181,38 @@
           "response": []
         },
         {
+          "name": "User Change Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"current_password\": \"{{password}}\",\n  \"new_password\": \"newpass123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/change-password",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "change-password"
+              ]
+            },
+            "description": "Any authenticated USER can change their own password.\nValidation:\n- current_password required\n- new_password required (min 6 chars)\n- new_password must be different\n- token is rotated after password change"
+          },
+          "response": []
+        },
+        {
           "name": "Global Candles (Last 24h)",
           "request": {
             "method": "POST",
@@ -588,7 +620,41 @@
                 "change-password"
               ]
             },
-            "description": "Admin/Super-admin route. Change current password.\nValidation:\n- current_password required\n- new_password required (min 6 chars)\n- new_password must be different"
+            "description": "Any authenticated ADMIN or SUPER_ADMIN can change their own password.\nValidation:\n- current_password required\n- new_password required (min 6 chars)\n- new_password must be different\n- token is rotated after password change"
+          },
+          "response": []
+        },
+        {
+          "name": "Super Admin Change User Password",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"new_password\": \"NewPass@123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/users/{{user_id}}/password",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{user_id}}",
+                "password"
+              ]
+            },
+            "description": "SUPER_ADMIN only. Change password for a target USER or ADMIN account.\nRules:\n- target user_id is required\n- target cannot be SUPER_ADMIN\n- new_password required (min 6 chars)\n- target user's token is rotated and active sockets are closed"
           },
           "response": []
         },

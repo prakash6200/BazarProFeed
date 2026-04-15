@@ -21,6 +21,10 @@ type AdminChangePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
+type SuperAdminChangeUserPasswordRequest struct {
+	NewPassword string `json:"new_password"`
+}
+
 func ValidateCreateUser(c *fiber.Ctx) error {
 	var req CreateUserRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -138,6 +142,37 @@ func ValidateAdminChangePassword(c *fiber.Ctx) error {
 			"status_code": fiber.StatusBadRequest,
 			"message":     "new_password must be different from current_password",
 			"error":       "new_password must be different from current_password",
+		})
+	}
+
+	c.Locals("validated_request", req)
+	return c.Next()
+}
+
+func ValidateSuperAdminChangeUserPassword(c *fiber.Ctx) error {
+	var req SuperAdminChangeUserPasswordRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
+			"error":       "invalid request body",
+		})
+	}
+
+	req.NewPassword = strings.TrimSpace(req.NewPassword)
+	if req.NewPassword == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "new_password is required",
+			"error":       "new_password is required",
+		})
+	}
+
+	if len(req.NewPassword) < 6 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "new_password must be at least 6 characters",
+			"error":       "new_password must be at least 6 characters",
 		})
 	}
 

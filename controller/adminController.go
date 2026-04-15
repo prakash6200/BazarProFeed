@@ -402,6 +402,103 @@ func (ac *AdminController) ChangePassword(c *fiber.Ctx) error {
 	})
 }
 
+func (ac *AdminController) ChangeUserPassword(c *fiber.Ctx) error {
+	targetUserID := strings.TrimSpace(c.Params("id"))
+	if targetUserID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "user id is required",
+			"error":       "user id is required",
+		})
+	}
+
+	actor, ok := c.Locals("user").(*models.User)
+	if !ok || actor == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"status_code": fiber.StatusUnauthorized,
+			"message":     "invalid authenticated user",
+			"error":       "invalid authenticated user",
+		})
+	}
+
+	req := c.Locals("validated_request").(validator.SuperAdminChangeUserPasswordRequest)
+
+	targetUser, err := models.GetUserByID(ac.db, targetUserID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"status_code": fiber.StatusNotFound,
+				"message":     "user not found",
+				"error":       "user not found",
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch user",
+			"error":       "failed to fetch user",
+		})
+	}
+
+	if targetUser.IsSuperAdminRole() {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"status_code": fiber.StatusForbidden,
+			"message":     "super admin password cannot be changed from this endpoint",
+			"error":       "super admin password cannot be changed from this endpoint",
+		})
+	}
+
+	if targetUser.PasswordHash != "" && models.CheckPasswordHash(req.NewPassword, targetUser.PasswordHash) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "new_password must be different from current password",
+			"error":       "new_password must be different from current password",
+		})
+	}
+
+	newPasswordHash, err := models.HashPassword(req.NewPassword)
+	if err != nil {
+		log.Printf("error hashing new password for user %s: %v", targetUser.Username, err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to update password",
+			"error":       "failed to update password",
+		})
+	}
+
+	err = ac.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.User{}).Where("id = ?", targetUser.ID).Update("password_hash", newPasswordHash).Error; err != nil {
+			return err
+		}
+
+		if err := targetUser.RefreshToken(tx); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		log.Printf("error changing password by super admin: actor=%s target=%s err=%v", actor.Username, targetUser.Username, err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to change password",
+			"error":       "failed to change password",
+		})
+	}
+
+	ac.socketHub.CloseUserConnections(targetUser.ID)
+	log.Printf("user password changed by super admin: actor=%s target=%s target_role=%s", actor.Username, targetUser.Username, targetUser.EffectiveRole())
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code": fiber.StatusOK,
+		"message":     "password changed successfully",
+		"user": fiber.Map{
+			"id":       targetUser.ID,
+			"username": targetUser.Username,
+			"role":     targetUser.EffectiveRole(),
+		},
+	})
+}
+
 func (ac *AdminController) GetAdminPermissions(c *fiber.Ctx) error {
 	targetUserID := strings.TrimSpace(c.Params("id"))
 	if targetUserID == "" {

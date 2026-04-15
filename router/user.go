@@ -17,6 +17,7 @@ func RegisterUserRoutes(app *fiber.App, userController *controller.UserControlle
 	userRoutes := app.Group("/api", middleware.UserAuth(db))
 	userRoutes.Get("/profile", userController.GetProfile)
 	userRoutes.Post("/refresh-token", validator.ValidateRefreshToken, userController.RefreshToken)
+	userRoutes.Post("/change-password", validator.ValidateAdminChangePassword, userController.ChangePassword)
 	userRoutes.Post("/global/candles", validator.ValidateAnalyticsCandlesPayload, userController.GetGlobalCandles)
 	userRoutes.Post("/global/ticks", validator.ValidateAnalyticsTicksPayload, userController.GetGlobalRawTicks)
 	userRoutes.Post("/zerodha/candles", validator.ValidateAnalyticsCandlesPayload, userController.GetZerodhaCandles)
