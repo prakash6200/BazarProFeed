@@ -65,9 +65,8 @@ func (b *TickEventBatcher[T]) Enqueue(item T) {
 	select {
 	case b.queue <- item:
 	default:
-		// Keep data loss minimal by applying backpressure only when queue is fully saturated.
-		log.Printf("%s batch queue saturated, applying backpressure", b.name)
-		b.queue <- item
+		// Queue full — drop this tick event rather than blocking the feed goroutine.
+		log.Printf("%s batch queue full (cap=%d), dropping event", b.name, cap(b.queue))
 	}
 }
 

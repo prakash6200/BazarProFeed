@@ -543,7 +543,7 @@ func (s *ZerodhaFeedService) rebroadcastStaleStateLoop(ctx context.Context) {
 }
 
 func (s *ZerodhaFeedService) rebroadcastIfStale() {
-	if s.tickHub == nil {
+	if s.tickHub == nil || s.tickHub.SubscribersCount() == 0 {
 		return
 	}
 
@@ -1158,7 +1158,9 @@ func (s *ZerodhaFeedService) parseAndPublishTicks(payload []byte) {
 			s.tickHub.Publish(updated)
 		}
 		if s.redisCache != nil && s.baseCtx != nil && s.baseCtx.Err() == nil {
-			s.redisCache.Set(s.baseCtx, ZerodhaTickPrefix, updated)
+			cacheCtx, cacheCancel := context.WithTimeout(s.baseCtx, 2*time.Second)
+			s.redisCache.Set(cacheCtx, ZerodhaTickPrefix, updated)
+			cacheCancel()
 		}
 	}
 }
@@ -1191,15 +1193,13 @@ func (s *ZerodhaFeedService) normalizePacket(packet []byte) (NormalizedTick, err
 		tick.UpperCircuit = circuit.Upper
 		tick.LowerCircuit = circuit.Lower
 	} else if s.redisCache != nil {
-		cacheCtx := context.Background()
-		if s.baseCtx != nil {
-			cacheCtx = s.baseCtx
-		}
+		cacheCtx, cacheCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		if circuit, found := s.redisCache.GetZerodhaCircuit(cacheCtx, token); found {
 			s.setCircuitLimit(token, circuit)
 			tick.UpperCircuit = circuit.Upper
 			tick.LowerCircuit = circuit.Lower
 		}
+		cacheCancel()
 	}
 
 	packetLen := len(packet)

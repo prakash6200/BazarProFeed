@@ -319,7 +319,9 @@ func (g *GlobalMarketFeedService) readLoop(tickHub *TickHub) {
 		}
 		g.recordRecentTick(updated)
 		if g.redisCache != nil && g.ctx != nil && g.ctx.Err() == nil {
-			g.redisCache.Set(g.ctx, GlobalTickPrefix, updated)
+			cacheCtx, cacheCancel := context.WithTimeout(g.ctx, 2*time.Second)
+			g.redisCache.Set(cacheCtx, GlobalTickPrefix, updated)
+			cacheCancel()
 		}
 	}
 }
@@ -396,10 +398,13 @@ func (g *GlobalMarketFeedService) reconnect() error {
 		return fmt.Errorf("ws url not configured")
 	}
 
-	// Close old connection
+	// Close old connection under lock to prevent writes to a closed conn.
+	g.writeMu.Lock()
 	if g.conn != nil {
 		_ = g.conn.Close()
 	}
+	g.conn = nil
+	g.writeMu.Unlock()
 
 	// Establish new connection
 	dialer := websocket.DefaultDialer
@@ -414,12 +419,19 @@ func (g *GlobalMarketFeedService) reconnect() error {
 	if err != nil {
 		return fmt.Errorf("dial failed: %w", err)
 	}
+
+	g.writeMu.Lock()
 	g.conn = conn
+	g.writeMu.Unlock()
+
 	g.clearSubscribed()
 	g.syncActiveSymbolsToRedis(context.Background())
 
-	// Re-load metadata and rebuild symbol list.
-	symbols := g.subscriptionSymbols()
+	// Re-load metadata and rebuild symbol list with a timeout
+	// so a slow DB doesn't stall the readLoop indefinitely.
+	dbCtx, dbCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer dbCancel()
+	symbols := g.subscriptionSymbolsWithCtx(dbCtx)
 
 	if len(symbols) > 0 {
 		if err := g.Subscribe(symbols); err != nil {
@@ -432,7 +444,7 @@ func (g *GlobalMarketFeedService) reconnect() error {
 }
 
 func (g *GlobalMarketFeedService) rebroadcastIfStale() {
-	if g.tickHub == nil {
+	if g.tickHub == nil || g.tickHub.SubscribersCount() == 0 {
 		return
 	}
 
@@ -694,11 +706,15 @@ func (g *GlobalMarketFeedService) getMeta(symbol string) globalInstrumentMeta {
 }
 
 func (g *GlobalMarketFeedService) subscriptionSymbols() []string {
+	return g.subscriptionSymbolsWithCtx(context.Background())
+}
+
+func (g *GlobalMarketFeedService) subscriptionSymbolsWithCtx(ctx context.Context) []string {
 	merged := make([]string, 0)
 
 	if g.db != nil {
-		g.loadInstrumentMeta()
-		dbSymbols, err := models.GetActiveGlobalInstrumentSymbols(g.db)
+		g.loadInstrumentMetaWithCtx(ctx)
+		dbSymbols, err := models.GetActiveGlobalInstrumentSymbols(g.db.WithContext(ctx))
 		if err != nil {
 			log.Printf("global market feed: failed to load active symbols: %v", err)
 		} else {
@@ -801,12 +817,16 @@ func (g *GlobalMarketFeedService) RefreshFromDatabase(ctx context.Context) error
 }
 
 func (g *GlobalMarketFeedService) loadInstrumentMeta() {
+	g.loadInstrumentMetaWithCtx(context.Background())
+}
+
+func (g *GlobalMarketFeedService) loadInstrumentMetaWithCtx(ctx context.Context) {
 	if g.db == nil {
 		return
 	}
 
 	var instruments []models.GlobalInstrument
-	if err := g.db.
+	if err := g.db.WithContext(ctx).
 		Select("symbol", "expiry", "strike", "status", "is_deleted").
 		Where("status = ? AND is_deleted = ?", models.GlobalInstrumentStatusActive, false).
 		Find(&instruments).Error; err != nil {

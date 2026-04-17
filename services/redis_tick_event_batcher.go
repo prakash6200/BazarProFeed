@@ -53,7 +53,9 @@ func (b *RedisTickEventBatcher[T]) Enqueue(item T) {
 		return
 	}
 
-	if err := b.client.RPush(context.Background(), b.queueKey, payload).Err(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := b.client.RPush(ctx, b.queueKey, payload).Err(); err != nil {
 		log.Printf("%s redis enqueue failed: %v", b.name, err)
 	}
 }

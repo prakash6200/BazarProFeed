@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strconv"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -22,9 +23,15 @@ func ConnectRedis() {
 	}
 
 	RedisClient = redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: App.Redis.Password,
-		DB:       dbIndex,
+		Addr:         addr,
+		Password:     App.Redis.Password,
+		DB:           dbIndex,
+		PoolSize:     20,
+		MinIdleConns: 5,
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+		PoolTimeout:  4 * time.Second,
 	})
 
 	ctx := context.Background()

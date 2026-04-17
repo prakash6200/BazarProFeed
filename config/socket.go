@@ -23,6 +23,7 @@ const (
 	socketPingPeriod     = 25 * time.Second
 	socketWriteWait      = 10 * time.Second
 	socketMaxBulkFilters = 1000
+	clientSendBuffer     = 256
 )
 
 type socketClient struct {
@@ -31,6 +32,8 @@ type socketClient struct {
 	userID     string
 	filterSyms map[string]struct{}
 	mu         sync.Mutex
+	sendCh     chan []byte
+	done       chan struct{}
 }
 
 type socketJWTClaims struct {
@@ -56,6 +59,66 @@ func NewSocketHub(db *gorm.DB) *SocketHub {
 
 func (h *SocketHub) SetInitialStateGetter(fn func(ctx context.Context, filterSym string) []json.RawMessage) {
 	h.initialStateGetter = fn
+}
+
+func newSocketClient(conn *ws.Conn, token, userID string, filterSyms map[string]struct{}) *socketClient {
+	return &socketClient{
+		conn:       conn,
+		userToken:  token,
+		userID:     userID,
+		filterSyms: filterSyms,
+		sendCh:     make(chan []byte, clientSendBuffer),
+		done:       make(chan struct{}),
+	}
+}
+
+func (c *socketClient) writePump() {
+	ticker := time.NewTicker(socketPingPeriod)
+	defer ticker.Stop()
+	defer func() {
+		// Close the connection so the ReadMessage loop in the handler unblocks.
+		c.mu.Lock()
+		_ = c.conn.Close()
+		c.mu.Unlock()
+	}()
+
+	for {
+		select {
+		case msg, ok := <-c.sendCh:
+			if !ok {
+				return
+			}
+			c.mu.Lock()
+			_ = c.conn.SetWriteDeadline(time.Now().Add(socketWriteWait))
+			err := c.conn.WriteMessage(ws.TextMessage, msg)
+			c.mu.Unlock()
+			if err != nil {
+				return
+			}
+		case <-ticker.C:
+			c.mu.Lock()
+			_ = c.conn.SetWriteDeadline(time.Now().Add(socketWriteWait))
+			err := c.conn.WriteControl(ws.PingMessage, []byte("ping"), time.Now().Add(socketWriteWait))
+			c.mu.Unlock()
+			if err != nil {
+				return
+			}
+		case <-c.done:
+			return
+		}
+	}
+}
+
+func (c *socketClient) close() {
+	select {
+	case <-c.done:
+		// already closed
+	default:
+		close(c.done)
+	}
+	c.mu.Lock()
+	_ = c.conn.Close()
+	c.mu.Unlock()
 }
 
 func (h *SocketHub) RegisterRoutes(app *fiber.App, path string) {
@@ -97,46 +160,21 @@ func (h *SocketHub) RegisterRoutes(app *fiber.App, path string) {
 			return
 		}
 
-		client := &socketClient{conn: c, userToken: token, userID: user.ID}
+		client := newSocketClient(c, token, user.ID, nil)
 		h.addClient(client)
 		log.Printf("websocket client connected: user=%s, token=%s", user.Username, maskToken(token))
 		defer h.removeClient(client)
 
 		if h.initialStateGetter != nil {
 			initCtx, initCancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer initCancel()
 			for _, raw := range h.initialStateGetter(initCtx, "") {
-				client.mu.Lock()
-				_ = c.SetWriteDeadline(time.Now().Add(socketWriteWait))
-				_ = c.WriteMessage(ws.TextMessage, raw)
-				client.mu.Unlock()
-			}
-		}
-
-		done := make(chan struct{})
-		defer close(done)
-
-		go func(conn *ws.Conn, writeMu *sync.Mutex, userName string, finished <-chan struct{}) {
-			ticker := time.NewTicker(socketPingPeriod)
-			defer ticker.Stop()
-
-			for {
 				select {
-				case <-finished:
-					return
-				case <-ticker.C:
-					writeMu.Lock()
-					_ = conn.SetWriteDeadline(time.Now().Add(socketWriteWait))
-					err := conn.WriteControl(ws.PingMessage, []byte("ping"), time.Now().Add(socketWriteWait))
-					writeMu.Unlock()
-					if err != nil {
-						log.Printf("websocket heartbeat failed: user=%s err=%v", userName, err)
-						_ = conn.Close()
-						return
-					}
+				case client.sendCh <- raw:
+				default:
 				}
 			}
-		}(c, &client.mu, user.Username, done)
+			initCancel()
+		}
 
 		for {
 			if _, _, err := c.ReadMessage(); err != nil {
@@ -189,45 +227,21 @@ func (h *SocketHub) RegisterSingleInstrumentRoutes(app *fiber.App, path string) 
 			return
 		}
 
-		client := &socketClient{conn: c, userToken: token, userID: user.ID, filterSyms: makeSymbolSet([]string{filterSymbol})}
+		client := newSocketClient(c, token, user.ID, makeSymbolSet([]string{filterSymbol}))
 		h.addClient(client)
 		log.Printf("filtered websocket connected: user=%s symbol=%s", user.Username, filterSymbol)
 		defer h.removeClient(client)
 
 		if h.initialStateGetter != nil {
 			initCtx, initCancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer initCancel()
 			for _, raw := range h.initialStateGetter(initCtx, filterSymbol) {
-				client.mu.Lock()
-				_ = c.SetWriteDeadline(time.Now().Add(socketWriteWait))
-				_ = c.WriteMessage(ws.TextMessage, raw)
-				client.mu.Unlock()
-			}
-		}
-
-		done := make(chan struct{})
-		defer close(done)
-
-		go func(conn *ws.Conn, writeMu *sync.Mutex, finished <-chan struct{}) {
-			ticker := time.NewTicker(socketPingPeriod)
-			defer ticker.Stop()
-
-			for {
 				select {
-				case <-finished:
-					return
-				case <-ticker.C:
-					writeMu.Lock()
-					_ = conn.SetWriteDeadline(time.Now().Add(socketWriteWait))
-					err := conn.WriteControl(ws.PingMessage, []byte("ping"), time.Now().Add(socketWriteWait))
-					writeMu.Unlock()
-					if err != nil {
-						_ = conn.Close()
-						return
-					}
+				case client.sendCh <- raw:
+				default:
 				}
 			}
-		}(c, &client.mu, done)
+			initCancel()
+		}
 
 		for {
 			if _, _, err := c.ReadMessage(); err != nil {
@@ -279,47 +293,23 @@ func (h *SocketHub) RegisterBulkInstrumentRoutes(app *fiber.App, path string) {
 			return
 		}
 
-		client := &socketClient{conn: c, userToken: token, userID: user.ID, filterSyms: makeSymbolSet(filterSymbols)}
+		client := newSocketClient(c, token, user.ID, makeSymbolSet(filterSymbols))
 		h.addClient(client)
 		log.Printf("bulk filtered websocket connected: user=%s symbols=%d", user.Username, len(filterSymbols))
 		defer h.removeClient(client)
 
 		if h.initialStateGetter != nil {
 			initCtx, initCancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer initCancel()
 			for _, symbol := range filterSymbols {
 				for _, raw := range h.initialStateGetter(initCtx, symbol) {
-					client.mu.Lock()
-					_ = c.SetWriteDeadline(time.Now().Add(socketWriteWait))
-					_ = c.WriteMessage(ws.TextMessage, raw)
-					client.mu.Unlock()
-				}
-			}
-		}
-
-		done := make(chan struct{})
-		defer close(done)
-
-		go func(conn *ws.Conn, writeMu *sync.Mutex, finished <-chan struct{}) {
-			ticker := time.NewTicker(socketPingPeriod)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-finished:
-					return
-				case <-ticker.C:
-					writeMu.Lock()
-					_ = conn.SetWriteDeadline(time.Now().Add(socketWriteWait))
-					err := conn.WriteControl(ws.PingMessage, []byte("ping"), time.Now().Add(socketWriteWait))
-					writeMu.Unlock()
-					if err != nil {
-						_ = conn.Close()
-						return
+					select {
+					case client.sendCh <- raw:
+					default:
 					}
 				}
 			}
-		}(c, &client.mu, done)
+			initCancel()
+		}
 
 		for {
 			if _, _, err := c.ReadMessage(); err != nil {
@@ -330,6 +320,11 @@ func (h *SocketHub) RegisterBulkInstrumentRoutes(app *fiber.App, path string) {
 }
 
 func (h *SocketHub) BroadcastJSON(payload any) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+
 	broadcastSymbol := extractSymbolFromPayload(payload)
 
 	h.mu.RLock()
@@ -338,7 +333,6 @@ func (h *SocketHub) BroadcastJSON(payload any) {
 		clients = append(clients, client)
 	}
 	h.mu.RUnlock()
-	failedClients := make([]*socketClient, 0, len(clients))
 
 	for _, client := range clients {
 		if len(client.filterSyms) > 0 {
@@ -347,16 +341,12 @@ func (h *SocketHub) BroadcastJSON(payload any) {
 			}
 		}
 
-		client.mu.Lock()
-		_ = client.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		err := client.conn.WriteJSON(payload)
-		client.mu.Unlock()
-		if err != nil {
-			failedClients = append(failedClients, client)
+		select {
+		case client.sendCh <- data:
+		default:
+			// slow client — drop message instead of blocking the broadcast loop
 		}
 	}
-
-	h.removeClients(failedClients)
 }
 
 func (h *SocketHub) CloseAll() {
@@ -369,9 +359,7 @@ func (h *SocketHub) CloseAll() {
 	h.mu.Unlock()
 
 	for _, client := range clients {
-		client.mu.Lock()
-		_ = client.conn.Close()
-		client.mu.Unlock()
+		client.close()
 	}
 }
 
@@ -379,15 +367,14 @@ func (h *SocketHub) addClient(client *socketClient) {
 	h.mu.Lock()
 	h.clients[client] = struct{}{}
 	h.mu.Unlock()
+	go client.writePump()
 }
 
 func (h *SocketHub) removeClient(client *socketClient) {
 	h.mu.Lock()
 	delete(h.clients, client)
 	h.mu.Unlock()
-	client.mu.Lock()
-	_ = client.conn.Close()
-	client.mu.Unlock()
+	client.close()
 	if len(client.filterSyms) > 0 {
 		log.Printf("filtered websocket disconnected: symbols=%d", len(client.filterSyms))
 	}
@@ -405,9 +392,7 @@ func (h *SocketHub) removeClients(clients []*socketClient) {
 	h.mu.Unlock()
 
 	for _, client := range clients {
-		client.mu.Lock()
-		_ = client.conn.Close()
-		client.mu.Unlock()
+		client.close()
 	}
 }
 
@@ -423,9 +408,7 @@ func (h *SocketHub) CloseUserConnections(token string) {
 	h.mu.Unlock()
 
 	for _, client := range clientsToClose {
-		client.mu.Lock()
-		_ = client.conn.Close()
-		client.mu.Unlock()
+		client.close()
 	}
 
 	if len(clientsToClose) > 0 {

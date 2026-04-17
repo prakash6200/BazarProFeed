@@ -70,8 +70,12 @@ func (c *RedisTickCache) Snapshot(ctx context.Context, prefix, filterSym string)
 		keys = []string{key}
 	} else {
 		var err error
-		keys, err = c.client.Keys(ctx, prefix+"*").Result()
-		if err != nil || len(keys) == 0 {
+		pattern := prefix + "*"
+		iter := c.client.Scan(ctx, 0, pattern, 100).Iterator()
+		for iter.Next(ctx) {
+			keys = append(keys, iter.Val())
+		}
+		if err = iter.Err(); err != nil || len(keys) == 0 {
 			return nil
 		}
 	}
