@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
+
+const redisQueueMaxLen = 20000
 
 type RedisTickEventBatcher[T any] struct {
 	name       string
@@ -17,6 +20,7 @@ type RedisTickEventBatcher[T any] struct {
 	flushEvery time.Duration
 	batchSize  int
 	flushFn    func([]T) error
+	startOnce  sync.Once
 }
 
 func NewRedisTickEventBatcher[T any](name, queueKey string, client *redis.Client, flushEvery time.Duration, batchSize int, flushFn func([]T) error) *RedisTickEventBatcher[T] {
@@ -40,7 +44,9 @@ func (b *RedisTickEventBatcher[T]) Start(ctx context.Context) {
 	if b == nil || b.client == nil || b.flushFn == nil || b.queueKey == "" {
 		return
 	}
-	go b.run(ctx)
+	b.startOnce.Do(func() {
+		go b.run(ctx)
+	})
 }
 
 func (b *RedisTickEventBatcher[T]) Enqueue(item T) {
@@ -55,6 +61,11 @@ func (b *RedisTickEventBatcher[T]) Enqueue(item T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	qLen, err := b.client.LLen(ctx, b.queueKey).Result()
+	if err == nil && qLen >= redisQueueMaxLen {
+		log.Printf("%s redis queue full (len=%d), dropping event", b.name, qLen)
+		return
+	}
 	if err := b.client.RPush(ctx, b.queueKey, payload).Err(); err != nil {
 		log.Printf("%s redis enqueue failed: %v", b.name, err)
 	}
@@ -72,10 +83,11 @@ func (b *RedisTickEventBatcher[T]) run(ctx context.Context) {
 		}
 		if err := b.flushFn(batch); err != nil {
 			log.Printf("%s redis batch flush failed (size=%d): %v", b.name, len(batch), err)
-			return
 		}
 		batch = batch[:0]
 	}
+
+	blpopBackoff := time.Duration(0)
 
 	for {
 		if ctx.Err() != nil {
@@ -83,14 +95,34 @@ func (b *RedisTickEventBatcher[T]) run(ctx context.Context) {
 			return
 		}
 
+		if blpopBackoff > 0 {
+			select {
+			case <-time.After(blpopBackoff):
+			case <-ctx.Done():
+				flush()
+				return
+			}
+		}
+
 		res, err := b.client.BLPop(ctx, time.Second, b.queueKey).Result()
 		if err == nil && len(res) == 2 {
+			blpopBackoff = 0
 			var item T
 			if unmarshalErr := json.Unmarshal([]byte(res[1]), &item); unmarshalErr == nil {
 				batch = append(batch, item)
 			}
 		} else if err != nil && !errors.Is(err, redis.Nil) && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 			log.Printf("%s redis dequeue failed: %v", b.name, err)
+			if blpopBackoff == 0 {
+				blpopBackoff = 500 * time.Millisecond
+			} else {
+				blpopBackoff *= 2
+				if blpopBackoff > 10*time.Second {
+					blpopBackoff = 10 * time.Second
+				}
+			}
+		} else {
+			blpopBackoff = 0
 		}
 
 		if len(batch) >= b.batchSize {

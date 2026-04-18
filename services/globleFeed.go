@@ -77,6 +77,7 @@ const (
 	globalStaleTickCheckInterval = 15 * time.Second
 	globalStaleTickMaxSilence    = 60 * time.Second
 	globalRecentTickHistory      = 5
+	globalReadTimeout            = 90 * time.Second
 )
 
 func NewGlobalMarketFeedService(db *gorm.DB, redisCache *RedisTickCache) *GlobalMarketFeedService {
@@ -94,7 +95,9 @@ func NewGlobalMarketFeedService(db *gorm.DB, redisCache *RedisTickCache) *Global
 	}
 	if db != nil {
 		flushFn := func(items []models.GlobalTickEvent) error {
-			return models.CreateGlobalTickEventsBatch(db, items, tickEventBatchSize)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			return models.CreateGlobalTickEventsBatch(db.WithContext(ctx), items, tickEventBatchSize)
 		}
 		if redisCache != nil && redisCache.Client() != nil {
 			svc.events = NewRedisTickEventBatcher(
@@ -139,70 +142,75 @@ func (g *GlobalMarketFeedService) Start(ctx context.Context, tickHub *TickHub) {
 		return
 	}
 
-	dialer := websocket.DefaultDialer
-	dialer.HandshakeTimeout = 10 * time.Second
-	headers := http.Header{}
-	headers.Set("x-api-key", g.apiKey)
-
-	dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
-	defer dialCancel()
-
-	conn, _, err := dialer.DialContext(dialCtx, g.wsURL, headers)
-	if err != nil {
-		log.Printf("global market feed: dial failed: %v", err)
-		return
-	}
-	g.conn = conn
-	g.syncActiveSymbolsToRedis(ctx)
-
-	symbols := g.subscriptionSymbols()
-
-	if len(symbols) == 0 {
-		log.Printf("global market feed: no symbols available for subscription")
-	} else {
-		if err := g.Subscribe(symbols); err != nil {
-			log.Printf("global market feed: subscribe failed: %v", err)
-		} else {
-			log.Printf("global market feed: subscribed %d symbols", len(symbols))
-		}
-	}
-
-	go g.readLoop(tickHub)
+	go g.connectAndRunLoop(tickHub)
 	go g.rebroadcastStaleStateLoop()
 }
 
-func (g *GlobalMarketFeedService) readLoop(tickHub *TickHub) {
+func (g *GlobalMarketFeedService) connectAndRunLoop(tickHub *TickHub) {
 	backoff := 1 * time.Second
 	maxBackoff := 30 * time.Second
 
 	for {
 		if g.ctx.Err() != nil {
-			log.Printf("global market feed: readLoop context cancelled, exiting")
 			return
 		}
 
-		_, message, err := g.conn.ReadMessage()
-		if err != nil {
-			log.Printf("global market feed: readLoop error: %v, reconnecting in %v...", err, backoff)
+		dialer := websocket.DefaultDialer
+		dialer.HandshakeTimeout = 10 * time.Second
+		headers := http.Header{}
+		headers.Set("x-api-key", g.apiKey)
 
-			// Try to reconnect
+		dialCtx, dialCancel := context.WithTimeout(g.ctx, 15*time.Second)
+		conn, _, err := dialer.DialContext(dialCtx, g.wsURL, headers)
+		dialCancel()
+
+		if err != nil {
+			log.Printf("global market feed: dial failed: %v, retrying in %v", err, backoff)
 			select {
 			case <-time.After(backoff):
-				if reconnectErr := g.reconnect(); reconnectErr != nil {
-					log.Printf("global market feed: reconnect failed: %v", reconnectErr)
-					backoff = time.Duration(float64(backoff) * 1.5)
-					if backoff > maxBackoff {
-						backoff = maxBackoff
-					}
-					continue
+				backoff = time.Duration(float64(backoff) * 1.5)
+				if backoff > maxBackoff {
+					backoff = maxBackoff
 				}
-				log.Printf("global market feed: reconnected successfully, resetting backoff")
-				backoff = 1 * time.Second
+				continue
 			case <-g.ctx.Done():
-				log.Printf("global market feed: readLoop context cancelled during reconnect")
 				return
 			}
-			continue
+		}
+
+		g.writeMu.Lock()
+		g.conn = conn
+		g.writeMu.Unlock()
+		g.syncActiveSymbolsToRedis(g.ctx)
+
+		symbols := g.subscriptionSymbols()
+		if len(symbols) == 0 {
+			log.Printf("global market feed: no symbols available for subscription")
+		} else {
+			if err := g.Subscribe(symbols); err != nil {
+				log.Printf("global market feed: subscribe failed: %v", err)
+			} else {
+				log.Printf("global market feed: subscribed %d symbols", len(symbols))
+			}
+		}
+
+		// readLoop blocks until connection breaks, then returns
+		g.readLoop(tickHub)
+		backoff = 1 * time.Second
+	}
+}
+
+func (g *GlobalMarketFeedService) readLoop(tickHub *TickHub) {
+	for {
+		if g.ctx.Err() != nil {
+			return
+		}
+
+		_ = g.conn.SetReadDeadline(time.Now().Add(globalReadTimeout))
+		_, message, err := g.conn.ReadMessage()
+		if err != nil {
+			log.Printf("global market feed: readLoop error: %v", err)
+			return
 		}
 
 		var raw map[string]interface{}
@@ -391,56 +399,6 @@ func (g *GlobalMarketFeedService) rebroadcastStaleStateLoop() {
 			g.rebroadcastIfStale()
 		}
 	}
-}
-
-func (g *GlobalMarketFeedService) reconnect() error {
-	if g.wsURL == "" {
-		return fmt.Errorf("ws url not configured")
-	}
-
-	// Close old connection under lock to prevent writes to a closed conn.
-	g.writeMu.Lock()
-	if g.conn != nil {
-		_ = g.conn.Close()
-	}
-	g.conn = nil
-	g.writeMu.Unlock()
-
-	// Establish new connection
-	dialer := websocket.DefaultDialer
-	dialer.HandshakeTimeout = 10 * time.Second
-	headers := http.Header{}
-	headers.Set("x-api-key", g.apiKey)
-
-	dialCtx, dialCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer dialCancel()
-
-	conn, _, err := dialer.DialContext(dialCtx, g.wsURL, headers)
-	if err != nil {
-		return fmt.Errorf("dial failed: %w", err)
-	}
-
-	g.writeMu.Lock()
-	g.conn = conn
-	g.writeMu.Unlock()
-
-	g.clearSubscribed()
-	g.syncActiveSymbolsToRedis(context.Background())
-
-	// Re-load metadata and rebuild symbol list with a timeout
-	// so a slow DB doesn't stall the readLoop indefinitely.
-	dbCtx, dbCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer dbCancel()
-	symbols := g.subscriptionSymbolsWithCtx(dbCtx)
-
-	if len(symbols) > 0 {
-		if err := g.Subscribe(symbols); err != nil {
-			return fmt.Errorf("subscribe failed: %w", err)
-		}
-		log.Printf("global market feed: reconnected and re-subscribed to %d symbols", len(symbols))
-	}
-
-	return nil
 }
 
 func (g *GlobalMarketFeedService) rebroadcastIfStale() {
@@ -865,9 +823,6 @@ func msToTimeOrNow(v interface{}, fallback time.Time) time.Time {
 }
 
 func (g *GlobalMarketFeedService) Subscribe(symbols []string) error {
-	if g.conn == nil {
-		return nil
-	}
 	if g.db != nil {
 		g.loadInstrumentMeta()
 	}
@@ -881,6 +836,10 @@ func (g *GlobalMarketFeedService) Subscribe(symbols []string) error {
 	}
 	g.writeMu.Lock()
 	defer g.writeMu.Unlock()
+	if g.conn == nil {
+		return nil
+	}
+	_ = g.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if err := g.conn.WriteJSON(msg); err != nil {
 		return err
 	}
@@ -893,9 +852,6 @@ func (g *GlobalMarketFeedService) Subscribe(symbols []string) error {
 }
 
 func (g *GlobalMarketFeedService) Unsubscribe(symbols []string) error {
-	if g.conn == nil {
-		return nil
-	}
 	symbols = uniqueSymbols(symbols)
 	if len(symbols) == 0 {
 		return nil
@@ -906,6 +862,10 @@ func (g *GlobalMarketFeedService) Unsubscribe(symbols []string) error {
 	}
 	g.writeMu.Lock()
 	defer g.writeMu.Unlock()
+	if g.conn == nil {
+		return nil
+	}
+	_ = g.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if err := g.conn.WriteJSON(msg); err != nil {
 		return err
 	}
@@ -921,7 +881,9 @@ func (g *GlobalMarketFeedService) Stop() {
 	if g.cancel != nil {
 		g.cancel()
 	}
+	g.writeMu.Lock()
 	if g.conn != nil {
-		g.conn.Close()
+		_ = g.conn.Close()
 	}
+	g.writeMu.Unlock()
 }

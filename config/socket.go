@@ -22,6 +22,7 @@ import (
 const (
 	socketPingPeriod     = 25 * time.Second
 	socketWriteWait      = 10 * time.Second
+	socketReadWait       = 60 * time.Second
 	socketMaxBulkFilters = 1000
 	clientSendBuffer     = 256
 )
@@ -176,6 +177,11 @@ func (h *SocketHub) RegisterRoutes(app *fiber.App, path string) {
 			initCancel()
 		}
 
+		_ = c.SetReadDeadline(time.Now().Add(socketReadWait))
+		c.SetPongHandler(func(string) error {
+			return c.SetReadDeadline(time.Now().Add(socketReadWait))
+		})
+
 		for {
 			if _, _, err := c.ReadMessage(); err != nil {
 				log.Printf("websocket client disconnected: user=%s", user.Username)
@@ -242,6 +248,11 @@ func (h *SocketHub) RegisterSingleInstrumentRoutes(app *fiber.App, path string) 
 			}
 			initCancel()
 		}
+
+		_ = c.SetReadDeadline(time.Now().Add(socketReadWait))
+		c.SetPongHandler(func(string) error {
+			return c.SetReadDeadline(time.Now().Add(socketReadWait))
+		})
 
 		for {
 			if _, _, err := c.ReadMessage(); err != nil {
@@ -310,6 +321,11 @@ func (h *SocketHub) RegisterBulkInstrumentRoutes(app *fiber.App, path string) {
 			}
 			initCancel()
 		}
+
+		_ = c.SetReadDeadline(time.Now().Add(socketReadWait))
+		c.SetPongHandler(func(string) error {
+			return c.SetReadDeadline(time.Now().Add(socketReadWait))
+		})
 
 		for {
 			if _, _, err := c.ReadMessage(); err != nil {

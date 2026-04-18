@@ -160,7 +160,7 @@ func (d *CircuitDetectorService) refreshLimits(ctx context.Context) {
 	}
 
 	// Build instrument keys ("EXCHANGE:SYMBOL") for all active instruments.
-	instruments := d.loadActiveInstruments()
+	instruments := d.loadActiveInstruments(ctx)
 	if len(instruments) == 0 {
 		log.Println("circuit detector: no active instruments found")
 		return
@@ -216,13 +216,16 @@ func (d *CircuitDetectorService) refreshLimits(ctx context.Context) {
 }
 
 // loadActiveInstruments fetches all active instruments without exchange/segment filtering.
-func (d *CircuitDetectorService) loadActiveInstruments() []models.Instrument {
+func (d *CircuitDetectorService) loadActiveInstruments(ctx context.Context) []models.Instrument {
 	if d.db == nil {
 		return nil
 	}
 
+	dbCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
 	var instruments []models.Instrument
-	err := d.db.
+	err := d.db.WithContext(dbCtx).
 		Select("instrument_token", "trading_symbol", "exchange", "segment").
 		Where("is_deleted = ?", false).
 		Where("status = ?", models.InstrumentStatusActive).

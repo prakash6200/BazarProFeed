@@ -27,10 +27,7 @@ func (h *TickHub) Subscribe(buffer int) (<-chan NormalizedTick, func()) {
 
 	unsubscribe := func() {
 		h.mu.Lock()
-		if _, ok := h.subscribers[ch]; ok {
-			delete(h.subscribers, ch)
-			close(ch)
-		}
+		delete(h.subscribers, ch)
 		h.mu.Unlock()
 	}
 

@@ -231,7 +231,9 @@ func NewZerodhaFeedService(cfg config.ZerodhaConfig, db *gorm.DB, tickHub *TickH
 	}
 	if db != nil {
 		flushFn := func(items []models.ZerodhaTickEvent) error {
-			return models.CreateZerodhaTickEventsBatch(db, items, tickEventBatchSize)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			return models.CreateZerodhaTickEventsBatch(db.WithContext(ctx), items, tickEventBatchSize)
 		}
 		if redisCache != nil && redisCache.Client() != nil {
 			service.events = NewRedisTickEventBatcher(
@@ -1096,6 +1098,7 @@ func (s *ZerodhaFeedService) writeJSON(conn *websocket.Conn, payload any) error 
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
