@@ -11,19 +11,23 @@ const (
 	MarketStatusClosed = "CLOSED"
 )
 
+var istLocation = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		return time.FixedZone("IST", 5*3600+30*60)
+	}
+	return loc
+}()
+
 // IsIndianMarketOpen returns true when the current time falls within NSE regular
 // trading hours (Monday–Friday, 09:15–15:30 IST).
 func IsIndianMarketOpen() bool {
-	loc, err := time.LoadLocation("Asia/Kolkata")
-	if err != nil {
-		return true // fallback: treat as open
-	}
-	now := time.Now().In(loc)
+	now := time.Now().In(istLocation)
 	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
 		return false
 	}
-	open := time.Date(now.Year(), now.Month(), now.Day(), 9, 15, 0, 0, loc)
-	close_ := time.Date(now.Year(), now.Month(), now.Day(), 15, 30, 0, 0, loc)
+	open := time.Date(now.Year(), now.Month(), now.Day(), 9, 15, 0, 0, istLocation)
+	close_ := time.Date(now.Year(), now.Month(), now.Day(), 15, 30, 0, 0, istLocation)
 	return now.After(open) && now.Before(close_)
 }
 
@@ -114,6 +118,13 @@ func (m *MarketStateManager) Get(symbol string) (NormalizedTick, bool) {
 	tick, ok := m.latest[symbol]
 	m.mu.RUnlock()
 	return tick, ok
+}
+
+// Remove deletes a symbol from the market state. Call when an instrument is unsubscribed.
+func (m *MarketStateManager) Remove(symbol string) {
+	m.mu.Lock()
+	delete(m.latest, symbol)
+	m.mu.Unlock()
 }
 
 func (m *MarketStateManager) Snapshot() []NormalizedTick {

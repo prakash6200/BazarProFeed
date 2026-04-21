@@ -583,3 +583,39 @@ func GetActiveInstrumentsForFeed(db *gorm.DB) ([]Instrument, error) {
 		Find(&instruments).Error
 	return instruments, err
 }
+
+// MarkExpiredInstruments sets is_deleted=true and status=INACTIVE for all
+// instruments whose expiry date is before today.
+func MarkExpiredInstruments(db *gorm.DB) (int64, error) {
+	now := time.Now().UTC().Truncate(24 * time.Hour)
+	result := db.Model(&Instrument{}).
+		Where("is_deleted = ?", false).
+		Where("expiry IS NOT NULL AND expiry < ?", now).
+		Updates(map[string]interface{}{"is_deleted": true, "status": InstrumentStatusInactive})
+	return result.RowsAffected, result.Error
+}
+
+// GetExpiredInstrumentIdentifiers returns trading_symbol and instrument_token
+// for instruments whose expiry is before today and are not yet soft-deleted.
+// Call this BEFORE MarkExpiredInstruments to know which Redis keys to remove.
+func GetExpiredInstrumentIdentifiers(db *gorm.DB) (symbols []string, tokens []int64, err error) {
+	now := time.Now().UTC().Truncate(24 * time.Hour)
+	var instruments []Instrument
+	err = db.Select("trading_symbol", "instrument_token").
+		Where("is_deleted = ?", false).
+		Where("expiry IS NOT NULL AND expiry < ?", now).
+		Find(&instruments).Error
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, inst := range instruments {
+		sym := strings.ToUpper(strings.TrimSpace(inst.TradingSymbol))
+		if sym != "" {
+			symbols = append(symbols, sym)
+		}
+		if inst.InstrumentToken > 0 {
+			tokens = append(tokens, inst.InstrumentToken)
+		}
+	}
+	return symbols, tokens, nil
+}

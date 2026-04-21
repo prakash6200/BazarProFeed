@@ -63,7 +63,9 @@ func (ctl *AdminGlobalInstrumentController) refreshFeed() error {
 	if ctl.FeedSvc == nil {
 		return nil
 	}
-	return ctl.FeedSvc.RefreshFromDatabase(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return ctl.FeedSvc.RefreshFromDatabase(ctx)
 }
 
 func (ctl *AdminGlobalInstrumentController) List(c *fiber.Ctx) error {

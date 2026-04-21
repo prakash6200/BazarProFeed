@@ -444,7 +444,9 @@ func (h *SocketHub) resolveUserFromSocketToken(token string) (*models.User, erro
 		return user, nil
 	}
 
-	return models.GetUserByToken(h.db, token)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return models.GetUserByToken(h.db.WithContext(ctx), token)
 }
 
 func (h *SocketHub) resolveUserFromJWT(token string) (*models.User, error) {
@@ -464,7 +466,9 @@ func (h *SocketHub) resolveUserFromJWT(token string) (*models.User, error) {
 		return nil, errors.New("invalid jwt token")
 	}
 
-	return models.GetUserByID(h.db, claims.UserID)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return models.GetUserByID(h.db.WithContext(ctx), claims.UserID)
 }
 
 func (h *SocketHub) GetClientCount() int {
@@ -565,10 +569,14 @@ func (h *SocketHub) resolveSymbolsByInstrumentTokens(tokens []int64) (map[int64]
 		return map[int64]string{}, nil
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	dbCtx := h.db.WithContext(ctx)
+
 	resolved := make(map[int64]string, len(tokens))
 
 	var instruments []models.Instrument
-	if err := h.db.
+	if err := dbCtx.
 		Select("instrument_token", "trading_symbol", "status", "is_deleted").
 		Where("instrument_token IN ? AND is_deleted = ?", tokens, false).
 		Find(&instruments).Error; err != nil {
@@ -598,7 +606,7 @@ func (h *SocketHub) resolveSymbolsByInstrumentTokens(tokens []int64) (map[int64]
 	}
 
 	var globalInstruments []models.GlobalInstrument
-	if err := h.db.
+	if err := dbCtx.
 		Select("instrument_token", "symbol", "trading_symbol", "status", "is_deleted").
 		Where("instrument_token IN ? AND is_deleted = ?", unresolved, false).
 		Find(&globalInstruments).Error; err != nil {

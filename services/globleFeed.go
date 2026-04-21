@@ -42,10 +42,11 @@ type GlobalMarketFeedService struct {
 	subsMu     sync.RWMutex
 	subscribed map[string]struct{}
 
-	marketState       *MarketStateManager
-	lastInboundTickAt atomic.Int64
-	recentMu          sync.RWMutex
-	recentBySym       map[string][]NormalizedTick
+	marketState         *MarketStateManager
+	lastInboundTickAt   atomic.Int64
+	lastClosedBroadcast atomic.Int64
+	recentMu            sync.RWMutex
+	recentBySym         map[string][]NormalizedTick
 }
 
 type globalInstrumentMeta struct {
@@ -161,24 +162,33 @@ func (g *GlobalMarketFeedService) connectAndRunLoop(tickHub *TickHub) {
 		headers.Set("x-api-key", g.apiKey)
 
 		dialCtx, dialCancel := context.WithTimeout(g.ctx, 15*time.Second)
-		conn, _, err := dialer.DialContext(dialCtx, g.wsURL, headers)
+		conn, resp, err := dialer.DialContext(dialCtx, g.wsURL, headers)
 		dialCancel()
 
 		if err != nil {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
 			log.Printf("global market feed: dial failed: %v, retrying in %v", err, backoff)
+			timer := time.NewTimer(backoff)
 			select {
-			case <-time.After(backoff):
+			case <-timer.C:
 				backoff = time.Duration(float64(backoff) * 1.5)
 				if backoff > maxBackoff {
 					backoff = maxBackoff
 				}
 				continue
 			case <-g.ctx.Done():
+				timer.Stop()
 				return
 			}
 		}
 
+		// Close the previous connection before storing the new one to prevent fd leak.
 		g.writeMu.Lock()
+		if g.conn != nil {
+			_ = g.conn.Close()
+		}
 		g.conn = conn
 		g.writeMu.Unlock()
 		g.syncActiveSymbolsToRedis(g.ctx)
@@ -412,10 +422,16 @@ func (g *GlobalMarketFeedService) rebroadcastIfStale() {
 	}
 
 	if !IsGlobalMarketOpen() {
+		// Throttle closed-market rebroadcast to once per 5 minutes.
+		last := g.lastClosedBroadcast.Load()
+		if last > 0 && time.Since(time.Unix(0, last)) < 5*time.Minute {
+			return
+		}
 		for _, tick := range ticks {
 			tick.MarketStatus = MarketStatusClosed
 			g.tickHub.Publish(tick)
 		}
+		g.lastClosedBroadcast.Store(time.Now().UnixNano())
 		return
 	}
 
@@ -664,7 +680,9 @@ func (g *GlobalMarketFeedService) getMeta(symbol string) globalInstrumentMeta {
 }
 
 func (g *GlobalMarketFeedService) subscriptionSymbols() []string {
-	return g.subscriptionSymbolsWithCtx(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return g.subscriptionSymbolsWithCtx(ctx)
 }
 
 func (g *GlobalMarketFeedService) subscriptionSymbolsWithCtx(ctx context.Context) []string {
@@ -763,6 +781,15 @@ func (g *GlobalMarketFeedService) RefreshFromDatabase(ctx context.Context) error
 		if err := g.Unsubscribe(toUnsub); err != nil {
 			return fmt.Errorf("unsubscribe failed: %w", err)
 		}
+		// Clean up stale in-memory state for unsubscribed symbols.
+		for _, sym := range toUnsub {
+			g.marketState.Remove(sym)
+		}
+		g.recentMu.Lock()
+		for _, sym := range toUnsub {
+			delete(g.recentBySym, sym)
+		}
+		g.recentMu.Unlock()
 	}
 	if len(toSub) > 0 {
 		if err := g.Subscribe(toSub); err != nil {
@@ -775,7 +802,9 @@ func (g *GlobalMarketFeedService) RefreshFromDatabase(ctx context.Context) error
 }
 
 func (g *GlobalMarketFeedService) loadInstrumentMeta() {
-	g.loadInstrumentMetaWithCtx(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	g.loadInstrumentMetaWithCtx(ctx)
 }
 
 func (g *GlobalMarketFeedService) loadInstrumentMetaWithCtx(ctx context.Context) {
@@ -884,6 +913,7 @@ func (g *GlobalMarketFeedService) Stop() {
 	g.writeMu.Lock()
 	if g.conn != nil {
 		_ = g.conn.Close()
+		g.conn = nil
 	}
 	g.writeMu.Unlock()
 }

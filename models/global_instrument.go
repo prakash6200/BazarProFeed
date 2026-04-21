@@ -594,3 +594,37 @@ func GetGlobalInstrumentsPaginated(db *gorm.DB, page, limit int, includeDeleted 
 
 	return instruments, total, nil
 }
+
+// MarkExpiredGlobalInstruments sets is_deleted=true and status=INACTIVE for all
+// global instruments whose expiry date is before today.
+func MarkExpiredGlobalInstruments(db *gorm.DB) (int64, error) {
+	now := time.Now().UTC().Truncate(24 * time.Hour)
+	result := db.Model(&GlobalInstrument{}).
+		Where("is_deleted = ?", false).
+		Where("expiry IS NOT NULL AND expiry < ?", now).
+		Updates(map[string]interface{}{"is_deleted": true, "status": GlobalInstrumentStatusInactive})
+	return result.RowsAffected, result.Error
+}
+
+// GetExpiredGlobalInstrumentSymbols returns symbols for global instruments whose
+// expiry is before today and are not yet soft-deleted.
+// Call this BEFORE MarkExpiredGlobalInstruments to know which Redis keys to remove.
+func GetExpiredGlobalInstrumentSymbols(db *gorm.DB) ([]string, error) {
+	now := time.Now().UTC().Truncate(24 * time.Hour)
+	var instruments []GlobalInstrument
+	err := db.Select("symbol").
+		Where("is_deleted = ?", false).
+		Where("expiry IS NOT NULL AND expiry < ?", now).
+		Find(&instruments).Error
+	if err != nil {
+		return nil, err
+	}
+	var symbols []string
+	for _, inst := range instruments {
+		sym := strings.ToUpper(strings.TrimSpace(inst.Symbol))
+		if sym != "" {
+			symbols = append(symbols, sym)
+		}
+	}
+	return symbols, nil
+}

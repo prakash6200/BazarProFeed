@@ -111,3 +111,13 @@ This document is based on a full line-by-line review of the current codebase.
 1. Make admin user creation password-capable in admin API flow (currently admin-created users are token-created; login requires password hash).
 2. Add entitlement model and checks before websocket stream delivery.
 3. Introduce provider interface to start true multi-provider architecture.
+
+
+1. working on backoffice
+Seed exchange setting
+create exchange
+list exchange
+exchange getbyid
+update exchange and bulk update
+default symbol create, update, delete and list
+

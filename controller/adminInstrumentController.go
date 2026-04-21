@@ -30,7 +30,9 @@ func (ic *AdminInstrumentController) refreshZerodhaFeed() error {
 	if ic.zerodhaFeed == nil {
 		return nil
 	}
-	return ic.zerodhaFeed.RefreshFromDatabase(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return ic.zerodhaFeed.RefreshFromDatabase(ctx)
 }
 
 func parseInstrumentExpiry(value string) (*time.Time, error) {

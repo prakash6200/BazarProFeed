@@ -214,7 +214,8 @@ type ZerodhaFeedService struct {
 	circuitMu      sync.RWMutex
 	circuitByToken map[int64]zerodhaCircuitLimit
 
-	lastInboundTickAt atomic.Int64
+	lastInboundTickAt   atomic.Int64
+	lastClosedBroadcast atomic.Int64
 }
 
 func NewZerodhaFeedService(cfg config.ZerodhaConfig, db *gorm.DB, tickHub *TickHub, redisCache *RedisTickCache) *ZerodhaFeedService {
@@ -329,12 +330,7 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 		if s.shouldExchangeRequestToken() {
 			if exchangeErr := s.ensureAccessTokenFromRequestToken(); exchangeErr == nil {
 				if revalidateErr := s.validateAccessToken(); revalidateErr == nil {
-					if s.events != nil {
-						s.events.Start(ctx)
-					}
-					go s.rebroadcastStaleStateLoop(ctx)
-					go s.circuitLimitRefreshLoop(ctx)
-					go s.runReconnectLoop(ctx)
+					s.launchFeedGoroutines(ctx)
 					return
 				}
 			}
@@ -344,13 +340,24 @@ func (s *ZerodhaFeedService) Start(ctx context.Context) {
 		return
 	}
 
+	s.launchFeedGoroutines(ctx)
+}
+
+// launchFeedGoroutines starts the event batcher and all background goroutines.
+// A child context ensures rebroadcast and circuit goroutines exit when
+// runReconnectLoop exits (e.g. auth failure), preventing goroutine accumulation.
+func (s *ZerodhaFeedService) launchFeedGoroutines(ctx context.Context) {
 	if s.events != nil {
 		s.events.Start(ctx)
 	}
 
-	go s.rebroadcastStaleStateLoop(ctx)
-	go s.circuitLimitRefreshLoop(ctx)
-	go s.runReconnectLoop(ctx)
+	feedCtx, feedCancel := context.WithCancel(ctx)
+	go s.rebroadcastStaleStateLoop(feedCtx)
+	go s.circuitLimitRefreshLoop(feedCtx)
+	go func() {
+		defer feedCancel() // cancel sibling goroutines when reconnect loop exits
+		s.runReconnectLoop(ctx)
+	}()
 }
 
 func (s *ZerodhaFeedService) circuitLimitRefreshLoop(ctx context.Context) {
@@ -555,10 +562,16 @@ func (s *ZerodhaFeedService) rebroadcastIfStale() {
 	}
 
 	if !IsIndianMarketOpen() {
+		// Throttle closed-market rebroadcast to once per 5 minutes.
+		last := s.lastClosedBroadcast.Load()
+		if last > 0 && time.Since(time.Unix(0, last)) < 5*time.Minute {
+			return
+		}
 		for _, tick := range ticks {
 			tick.MarketStatus = MarketStatusClosed
 			s.tickHub.Publish(tick)
 		}
+		s.lastClosedBroadcast.Store(time.Now().UnixNano())
 		return
 	}
 
@@ -862,10 +875,12 @@ func (s *ZerodhaFeedService) runReconnectLoop(ctx context.Context) {
 
 		s.setConnectionState(connectionStateReconnecting)
 		log.Printf("zerodha feed reconnecting in %s due to error: %v", backoff, err)
+		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-time.After(backoff):
+		case <-timer.C:
 		}
 		backoff *= 2
 		if backoff > maxReconnectBackoff {
@@ -914,7 +929,9 @@ func (s *ZerodhaFeedService) connectAndRead(ctx context.Context) error {
 	log.Printf("zerodha websocket connected, subscribers=%d", subscribers)
 
 	pingErrCh := make(chan error, 1)
-	go s.startHeartbeat(ctx, conn, pingErrCh)
+	hbCtx, hbCancel := context.WithCancel(ctx)
+	defer hbCancel()
+	go s.startHeartbeat(hbCtx, conn, pingErrCh)
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -1196,7 +1213,7 @@ func (s *ZerodhaFeedService) normalizePacket(packet []byte) (NormalizedTick, err
 		tick.UpperCircuit = circuit.Upper
 		tick.LowerCircuit = circuit.Lower
 	} else if s.redisCache != nil {
-		cacheCtx, cacheCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		cacheCtx, cacheCancel := context.WithTimeout(s.baseCtx, 500*time.Millisecond)
 		if circuit, found := s.redisCache.GetZerodhaCircuit(cacheCtx, token); found {
 			s.setCircuitLimit(token, circuit)
 			tick.UpperCircuit = circuit.Upper
@@ -1406,6 +1423,13 @@ func (s *ZerodhaFeedService) RefreshFromDatabase(ctx context.Context) error {
 		if _, ok := desired[token]; !ok {
 			if s.registry.Remove(token) {
 				toUnsub = append(toUnsub, token)
+				// Clean up stale in-memory state for this token.
+				if meta, ok := existing[token]; ok {
+					s.marketState.Remove(meta.Symbol)
+				}
+				s.circuitMu.Lock()
+				delete(s.circuitByToken, token)
+				s.circuitMu.Unlock()
 			}
 		}
 	}

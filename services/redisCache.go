@@ -182,3 +182,68 @@ func (c *RedisTickCache) GetZerodhaCircuit(ctx context.Context, token int64) (ze
 	}
 	return limit, true
 }
+
+// RemoveFromSymbolList removes the given symbols from a stored symbol list key.
+func (c *RedisTickCache) RemoveFromSymbolList(ctx context.Context, key string, toRemove []string) {
+	if c == nil || c.client == nil || len(toRemove) == 0 {
+		return
+	}
+	current := c.GetSymbolList(ctx, key)
+	if len(current) == 0 {
+		return
+	}
+	removeSet := make(map[string]struct{}, len(toRemove))
+	for _, s := range toRemove {
+		removeSet[strings.ToUpper(strings.TrimSpace(s))] = struct{}{}
+	}
+	filtered := make([]string, 0, len(current))
+	for _, s := range current {
+		if _, ok := removeSet[s]; !ok {
+			filtered = append(filtered, s)
+		}
+	}
+	c.SetSymbolList(ctx, key, filtered)
+}
+
+// DeleteBySymbols removes tick cache keys for the given symbols under the prefix.
+func (c *RedisTickCache) DeleteBySymbols(ctx context.Context, prefix string, symbols []string) int {
+	if c == nil || c.client == nil || len(symbols) == 0 {
+		return 0
+	}
+	keys := make([]string, 0, len(symbols))
+	for _, sym := range symbols {
+		norm := strings.ToUpper(strings.TrimSpace(sym))
+		if norm != "" {
+			keys = append(keys, prefix+norm)
+		}
+	}
+	if len(keys) == 0 {
+		return 0
+	}
+	del, err := c.client.Del(ctx, keys...).Result()
+	if err != nil {
+		log.Printf("redis cache delete error: prefix=%s count=%d err=%v", prefix, len(keys), err)
+	}
+	return int(del)
+}
+
+// DeleteCircuitByTokens removes circuit cache keys for the given instrument tokens.
+func (c *RedisTickCache) DeleteCircuitByTokens(ctx context.Context, tokens []int64) int {
+	if c == nil || c.client == nil || len(tokens) == 0 {
+		return 0
+	}
+	keys := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		if token > 0 {
+			keys = append(keys, ZerodhaCircuitPrefix+strconv.FormatInt(token, 10))
+		}
+	}
+	if len(keys) == 0 {
+		return 0
+	}
+	del, err := c.client.Del(ctx, keys...).Result()
+	if err != nil {
+		log.Printf("redis circuit delete error: count=%d err=%v", len(keys), err)
+	}
+	return int(del)
+}

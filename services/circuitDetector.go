@@ -170,8 +170,11 @@ func (d *CircuitDetectorService) refreshLimits(ctx context.Context) {
 	kc.SetAccessToken(accessToken)
 
 	keys := make([]string, 0, len(instruments))
+	activeSymbols := make(map[string]struct{}, len(instruments))
 	for _, inst := range instruments {
-		keys = append(keys, inst.Exchange+":"+inst.TradingSymbol)
+		key := inst.Exchange + ":" + inst.TradingSymbol
+		keys = append(keys, key)
+		activeSymbols[inst.TradingSymbol] = struct{}{}
 	}
 
 	fetched := 0
@@ -213,6 +216,24 @@ func (d *CircuitDetectorService) refreshLimits(ctx context.Context) {
 	}
 
 	log.Printf("circuit detector: refreshed limits for %d/%d instruments", fetched, len(keys))
+
+	// Purge stale entries for instruments that are no longer active.
+	d.limits.Range(func(key, _ any) bool {
+		// key is "EXCHANGE:SYMBOL"; extract the symbol part.
+		parts := strings.SplitN(key.(string), ":", 2)
+		if len(parts) == 2 {
+			if _, ok := activeSymbols[parts[1]]; !ok {
+				d.limits.Delete(key)
+			}
+		}
+		return true
+	})
+	d.states.Range(func(key, _ any) bool {
+		if _, ok := activeSymbols[key.(string)]; !ok {
+			d.states.Delete(key)
+		}
+		return true
+	})
 }
 
 // loadActiveInstruments fetches all active instruments without exchange/segment filtering.
