@@ -110,10 +110,14 @@ func main() {
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 		// Cap concurrent connections to a sane level for a 4GB box.
-		// Each WS connection holds 2 goroutines + 1 FD; without this
-		// cap a runaway client could exhaust file descriptors and
-		// wedge the accept loop (port stays open, no accept).
-		Concurrency: 65536,
+		// Each fasthttp worker holds a few KB of state and each WS
+		// connection holds 2 goroutines + 1 FD. 65536 was the old
+		// value but is larger than the machine can actually serve,
+		// so an abusive client could still push goroutine count
+		// past useful memory. 16384 leaves comfortable headroom
+		// (~64 MB stacks worst case) while absorbing real traffic
+		// spikes; the rate limiters drop anything above.
+		Concurrency: 16384,
 		// Disable Fiber's startup banner in production logs.
 		DisableStartupMessage: true,
 	})
@@ -327,7 +331,13 @@ func main() {
 		<-ctx.Done()
 		socketHub.CloseAll()
 		globSocketHub.CloseAll()
-		if err := app.Shutdown(); err != nil {
+		// Bounded graceful shutdown: a stuck import handler or a
+		// slow WS writePump must not be able to hold the process
+		// indefinitely. If the grace period elapses, ShutdownWithTimeout
+		// force-closes remaining connections and returns, so the
+		// orchestrator sees a clean exit instead of escalating to
+		// SIGKILL mid-transaction.
+		if err := app.ShutdownWithTimeout(30 * time.Second); err != nil {
 			log.Printf("failed to shutdown fiber app: %v", err)
 		}
 		// Drain audit-log worker pool before we let the DB handle close.

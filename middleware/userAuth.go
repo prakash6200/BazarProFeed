@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"feedprovider/models"
@@ -21,6 +22,89 @@ import (
 // while the port stays open. Failing fast (503) is the only way to
 // let the pool recover under pressure.
 const authDBTimeout = 2 * time.Second
+
+// authCacheTTL caps how long we trust a cached *User copy. This is
+// the single most impactful scalability fix in the codebase: without
+// it, every authenticated request hits Postgres, so a ~50 ms
+// slowdown on the DB is enough to drain the 50-conn pool and wedge
+// /api/* + /admin/*. 5 s is a deliberate tradeoff — it absorbs burst
+// traffic while keeping revoke/disable latency bounded. Explicit
+// invalidation hooks (InvalidateUserAuthCache*) give us instant
+// revocation on the happy path; the TTL is the safety net.
+const (
+	authCacheTTL     = 5 * time.Second
+	authCacheMaxSize = 8192
+)
+
+type authCacheEntry struct {
+	user      *models.User
+	expiresAt time.Time
+}
+
+var (
+	authCacheMu sync.RWMutex
+	authCache   = make(map[string]authCacheEntry, authCacheMaxSize)
+)
+
+func authCacheGet(userID string) (*models.User, bool) {
+	authCacheMu.RLock()
+	entry, ok := authCache[userID]
+	authCacheMu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		return nil, false
+	}
+	return entry.user, true
+}
+
+func authCacheSet(userID string, user *models.User) {
+	if user == nil || userID == "" {
+		return
+	}
+	authCacheMu.Lock()
+	if len(authCache) >= authCacheMaxSize {
+		// Cheap bounded eviction: drop 25% on overflow. Keeps the
+		// map from growing without bound if a pathological client
+		// somehow cycles userIDs. Worst case O(maxSize/4) per miss.
+		n := 0
+		for k := range authCache {
+			delete(authCache, k)
+			n++
+			if n >= authCacheMaxSize/4 {
+				break
+			}
+		}
+	}
+	authCache[userID] = authCacheEntry{
+		user:      user,
+		expiresAt: time.Now().Add(authCacheTTL),
+	}
+	authCacheMu.Unlock()
+}
+
+// InvalidateUserAuthCache drops the cached user record for a single
+// userID. Call this anywhere IsActive, TokenGeneratedAt, or the
+// password hash changes so the next request forces a fresh DB read.
+func InvalidateUserAuthCache(userID string) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return
+	}
+	authCacheMu.Lock()
+	delete(authCache, userID)
+	authCacheMu.Unlock()
+}
+
+// InvalidateAllUserAuthCache wipes every cached user record. Use
+// sparingly (schema migrations, bulk resets); everyday mutations
+// should prefer InvalidateUserAuthCache to avoid spiking DB load.
+func InvalidateAllUserAuthCache() {
+	authCacheMu.Lock()
+	authCache = make(map[string]authCacheEntry, authCacheMaxSize)
+	authCacheMu.Unlock()
+}
 
 type UserJWTClaims struct {
 	UserID   string `json:"user_id"`
@@ -112,9 +196,18 @@ func UserAuth(db *gorm.DB) fiber.Handler {
 			})
 		}
 
-		lookupCtx, cancel := context.WithTimeout(c.UserContext(), authDBTimeout)
-		user, err := models.GetUserByID(db.WithContext(lookupCtx), claims.UserID)
-		cancel()
+		var user *models.User
+		if cached, hit := authCacheGet(claims.UserID); hit {
+			user = cached
+			err = nil
+		} else {
+			lookupCtx, cancel := context.WithTimeout(c.UserContext(), authDBTimeout)
+			user, err = models.GetUserByID(db.WithContext(lookupCtx), claims.UserID)
+			cancel()
+			if err == nil && user != nil {
+				authCacheSet(claims.UserID, user)
+			}
+		}
 		if err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{

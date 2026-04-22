@@ -224,6 +224,11 @@ func (uc *UserController) Login(c *fiber.Ctx) error {
 		})
 	}
 
+	// Drop any stale cached copy of this user so the fresh
+	// TokenGeneratedAt/APIToken take effect immediately on the
+	// first authenticated request after login.
+	middleware.InvalidateUserAuthCache(user.ID)
+
 	jwtToken, err := middleware.GenerateJWT(user)
 	if err != nil {
 		log.Printf("error generating jwt for user %s: %v", user.Username, err)
@@ -310,6 +315,7 @@ func (uc *UserController) RefreshToken(c *fiber.Ctx) error {
 		})
 	}
 
+	middleware.InvalidateUserAuthCache(user.ID)
 	log.Printf("token refreshed for user: username=%s, id=%s", user.Username, user.ID)
 
 	jwtToken, err := middleware.GenerateJWT(user)
@@ -393,6 +399,7 @@ func (uc *UserController) ChangePassword(c *fiber.Ctx) error {
 	}
 
 	uc.socketHub.CloseUserConnections(user.ID)
+	middleware.InvalidateUserAuthCache(user.ID)
 	log.Printf("user password changed: username=%s, id=%s", user.Username, user.ID)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{

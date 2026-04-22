@@ -267,6 +267,10 @@ func (ac *AdminController) UpdateUserStatus(c *fiber.Ctx) error {
 		})
 	}
 
+	// Drop any cached copy of this user so the next request sees
+	// the updated IsActive flag within one request cycle.
+	middleware.InvalidateUserAuthCache(user.ID)
+
 	if !req.IsActive {
 		ac.socketHub.CloseUserConnections(user.ID)
 		log.Printf("user disabled and connections closed: username=%s, id=%s", user.Username, userID)
@@ -347,6 +351,7 @@ func (ac *AdminController) DeleteUser(c *fiber.Ctx) error {
 	}
 
 	middleware.InvalidateUserPermissionCache(user.ID)
+	middleware.InvalidateUserAuthCache(user.ID)
 
 	log.Printf("user deleted: username=%s, id=%s", user.Username, userID)
 
@@ -383,6 +388,7 @@ func (ac *AdminController) Logout(c *fiber.Ctx) error {
 		})
 	}
 
+	middleware.InvalidateUserAuthCache(user.ID)
 	log.Printf("admin logged out: username=%s, id=%s", user.Username, user.ID)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
@@ -447,6 +453,7 @@ func (ac *AdminController) ChangePassword(c *fiber.Ctx) error {
 	}
 
 	ac.socketHub.CloseUserConnections(user.ID)
+	middleware.InvalidateUserAuthCache(user.ID)
 	log.Printf("admin password changed: username=%s, id=%s", user.Username, user.ID)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
@@ -549,6 +556,7 @@ func (ac *AdminController) ChangeUserPassword(c *fiber.Ctx) error {
 	}
 
 	ac.socketHub.CloseUserConnections(targetUser.ID)
+	middleware.InvalidateUserAuthCache(targetUser.ID)
 	log.Printf("user password changed by super admin: actor=%s target=%s target_role=%s", actor.Username, targetUser.Username, targetUser.EffectiveRole())
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
