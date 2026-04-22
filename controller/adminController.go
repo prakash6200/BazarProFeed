@@ -65,15 +65,20 @@ func (ac *AdminController) CreateUser(c *fiber.Ctx) error {
 		}
 	}
 
+	lookupDB, lookupCancel := scopedDB(c, ac.db, adminDBTimeout)
 	var existingUser models.User
-	if err := ac.db.Where("username = ?", req.Username).First(&existingUser).Error; err == nil {
+	lookupErr := lookupDB.Where("username = ?", req.Username).First(&existingUser).Error
+	lookupCancel()
+	if lookupErr == nil {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
 			"status_code": fiber.StatusConflict,
 			"message":     "username already exists",
 			"error":       "username already exists",
 		})
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		log.Printf("error checking existing username: %v", err)
+	} else if isDBBusyErr(lookupErr) {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+		log.Printf("error checking existing username: %v", lookupErr)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "failed to validate username",
@@ -81,19 +86,27 @@ func (ac *AdminController) CreateUser(c *fiber.Ctx) error {
 		})
 	}
 
-	tx := ac.db.Begin()
-	if tx.Error != nil {
-		log.Printf("error starting transaction for user creation: %v", tx.Error)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"status_code": fiber.StatusInternalServerError,
-			"message":     "failed to create user",
-			"error":       "failed to create user",
-		})
-	}
+	txDB, txCancel := scopedDB(c, ac.db, adminWriteTxTimeout)
+	defer txCancel()
 
-	user, err := models.CreateUserWithPassword(tx, req.Username, req.Password, targetRole)
+	var createdUser *models.User
+	err := txDB.Transaction(func(tx *gorm.DB) error {
+		user, err := models.CreateUserWithPassword(tx, req.Username, req.Password, targetRole)
+		if err != nil {
+			return err
+		}
+		if targetRole == models.RoleAdmin {
+			if err := models.GrantPermissions(tx, user.ID, middleware.DefaultAdminPermissions); err != nil {
+				return err
+			}
+		}
+		createdUser = user
+		return nil
+	})
 	if err != nil {
-		_ = tx.Rollback().Error
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
 		log.Printf("error creating user: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -102,48 +115,38 @@ func (ac *AdminController) CreateUser(c *fiber.Ctx) error {
 		})
 	}
 
-	if targetRole == models.RoleAdmin {
-		if err := models.GrantPermissions(tx, user.ID, middleware.DefaultAdminPermissions); err != nil {
-			_ = tx.Rollback().Error
-			log.Printf("error assigning default admin permissions: user_id=%s err=%v", user.ID, err)
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"status_code": fiber.StatusInternalServerError,
-				"message":     "failed to assign default admin permissions",
-				"error":       "failed to assign default admin permissions",
-			})
-		}
-	}
+	middleware.InvalidateUserPermissionCache(createdUser.ID)
 
-	if err := tx.Commit().Error; err != nil {
-		_ = tx.Rollback().Error
-		log.Printf("error committing user creation transaction: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"status_code": fiber.StatusInternalServerError,
-			"message":     "failed to create user",
-			"error":       "failed to create user",
-		})
-	}
-
-	log.Printf("user created: username=%s, id=%s, role=%s, created_by=%s", user.Username, user.ID, user.EffectiveRole(), actor.ID)
+	log.Printf("user created: username=%s, id=%s, role=%s, created_by=%s", createdUser.Username, createdUser.ID, createdUser.EffectiveRole(), actor.ID)
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"status_code": fiber.StatusCreated,
 		"message":     "user created successfully",
 		"user": fiber.Map{
-			"id":                 user.ID,
-			"username":           user.Username,
-			"role":               user.EffectiveRole(),
-			"api_token":          user.APIToken,
-			"token_generated_at": user.TokenGeneratedAt,
-			"is_active":          user.IsActive,
-			"created_at":         user.CreatedAt,
+			"id":                 createdUser.ID,
+			"username":           createdUser.Username,
+			"role":               createdUser.EffectiveRole(),
+			"api_token":          createdUser.APIToken,
+			"token_generated_at": createdUser.TokenGeneratedAt,
+			"is_active":          createdUser.IsActive,
+			"created_at":         createdUser.CreatedAt,
 		},
 	})
 }
 
 func (ac *AdminController) GetAllUsers(c *fiber.Ctx) error {
-	users, err := models.GetAllUsers(ac.db)
+	page, limit, err := parsePageLimit(c, 20, 200)
 	if err != nil {
+		return err
+	}
+
+	db, cancel := scopedDB(c, ac.db, adminAnalyticsTimeout)
+	users, total, err := models.GetAllUsersPaginated(db, page, limit)
+	cancel()
+	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
 		log.Printf("error fetching users: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -165,25 +168,40 @@ func (ac *AdminController) GetAllUsers(c *fiber.Ctx) error {
 		}
 	}
 
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(limit) - 1) / int64(limit))
+	}
+
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status_code": fiber.StatusOK,
 		"message":     "users fetched successfully",
 		"users":       userList,
-		"count":       len(users),
+		"pagination": fiber.Map{
+			"page":          page,
+			"limit":         limit,
+			"total_records": total,
+			"total_pages":   totalPages,
+		},
 	})
 }
 
 func (ac *AdminController) GetUser(c *fiber.Ctx) error {
 	userID := c.Params("id")
 
-	user, err := models.GetUserByID(ac.db, userID)
+	db, cancel := scopedDB(c, ac.db, adminDBTimeout)
+	user, err := models.GetUserByID(db, userID)
+	cancel()
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"status_code": fiber.StatusNotFound,
 				"message":     "user not found",
 				"error":       "user not found",
 			})
+		}
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
 		}
 		log.Printf("error fetching user: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -213,14 +231,19 @@ func (ac *AdminController) UpdateUserStatus(c *fiber.Ctx) error {
 	userID := c.Params("id")
 	req := c.Locals("validated_request").(validator.UpdateStatusRequest)
 
-	user, err := models.GetUserByID(ac.db, userID)
+	lookupDB, lookupCancel := scopedDB(c, ac.db, adminDBTimeout)
+	user, err := models.GetUserByID(lookupDB, userID)
+	lookupCancel()
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"status_code": fiber.StatusNotFound,
 				"message":     "user not found",
 				"error":       "user not found",
 			})
+		}
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -229,8 +252,14 @@ func (ac *AdminController) UpdateUserStatus(c *fiber.Ctx) error {
 		})
 	}
 
-	if err := models.UpdateUserStatus(ac.db, userID, req.IsActive); err != nil {
-		log.Printf("error updating user status: %v", err)
+	updateDB, updateCancel := scopedDB(c, ac.db, adminDBTimeout)
+	updErr := models.UpdateUserStatus(updateDB, userID, req.IsActive)
+	updateCancel()
+	if updErr != nil {
+		if isDBBusyErr(updErr) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
+		log.Printf("error updating user status: %v", updErr)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "failed to update user status",
@@ -263,14 +292,19 @@ func (ac *AdminController) DeleteUser(c *fiber.Ctx) error {
 		})
 	}
 
-	user, err := models.GetUserByID(ac.db, userID)
+	lookupDB, lookupCancel := scopedDB(c, ac.db, adminDBTimeout)
+	user, err := models.GetUserByID(lookupDB, userID)
+	lookupCancel()
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"status_code": fiber.StatusNotFound,
 				"message":     "user not found",
 				"error":       "user not found",
 			})
+		}
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -297,14 +331,22 @@ func (ac *AdminController) DeleteUser(c *fiber.Ctx) error {
 
 	ac.socketHub.CloseUserConnections(user.ID)
 
-	if err := models.DeleteUser(ac.db, userID); err != nil {
-		log.Printf("error deleting user: %v", err)
+	delDB, delCancel := scopedDB(c, ac.db, adminDBTimeout)
+	delErr := models.DeleteUser(delDB, userID)
+	delCancel()
+	if delErr != nil {
+		if isDBBusyErr(delErr) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
+		log.Printf("error deleting user: %v", delErr)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "failed to delete user",
 			"error":       "failed to delete user",
 		})
 	}
+
+	middleware.InvalidateUserPermissionCache(user.ID)
 
 	log.Printf("user deleted: username=%s, id=%s", user.Username, userID)
 
@@ -326,7 +368,13 @@ func (ac *AdminController) Logout(c *fiber.Ctx) error {
 
 	ac.socketHub.CloseUserConnections(user.ID)
 
-	if err := user.RefreshToken(ac.db); err != nil {
+	db, cancel := scopedDB(c, ac.db, adminDBTimeout)
+	err := user.RefreshToken(db)
+	cancel()
+	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
 		log.Printf("error logging out admin %s: %v", user.Username, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -373,7 +421,8 @@ func (ac *AdminController) ChangePassword(c *fiber.Ctx) error {
 		})
 	}
 
-	err = ac.db.Transaction(func(tx *gorm.DB) error {
+	txDB, txCancel := scopedDB(c, ac.db, adminWriteTxTimeout)
+	err = txDB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&models.User{}).Where("id = ?", user.ID).Update("password_hash", newPasswordHash).Error; err != nil {
 			return err
 		}
@@ -384,7 +433,11 @@ func (ac *AdminController) ChangePassword(c *fiber.Ctx) error {
 
 		return nil
 	})
+	txCancel()
 	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
 		log.Printf("error changing password for admin %s: %v", user.Username, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -423,7 +476,9 @@ func (ac *AdminController) ChangeUserPassword(c *fiber.Ctx) error {
 
 	req := c.Locals("validated_request").(validator.SuperAdminChangeUserPasswordRequest)
 
-	targetUser, err := models.GetUserByID(ac.db, targetUserID)
+	lookupDB, lookupCancel := scopedDB(c, ac.db, adminDBTimeout)
+	targetUser, err := models.GetUserByID(lookupDB, targetUserID)
+	lookupCancel()
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
@@ -431,6 +486,9 @@ func (ac *AdminController) ChangeUserPassword(c *fiber.Ctx) error {
 				"message":     "user not found",
 				"error":       "user not found",
 			})
+		}
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -465,7 +523,8 @@ func (ac *AdminController) ChangeUserPassword(c *fiber.Ctx) error {
 		})
 	}
 
-	err = ac.db.Transaction(func(tx *gorm.DB) error {
+	txDB, txCancel := scopedDB(c, ac.db, adminWriteTxTimeout)
+	err = txDB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&models.User{}).Where("id = ?", targetUser.ID).Update("password_hash", newPasswordHash).Error; err != nil {
 			return err
 		}
@@ -476,7 +535,11 @@ func (ac *AdminController) ChangeUserPassword(c *fiber.Ctx) error {
 
 		return nil
 	})
+	txCancel()
 	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
 		log.Printf("error changing password by super admin: actor=%s target=%s err=%v", actor.Username, targetUser.Username, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -509,7 +572,9 @@ func (ac *AdminController) GetAdminPermissions(c *fiber.Ctx) error {
 		})
 	}
 
-	targetUser, err := models.GetUserByID(ac.db, targetUserID)
+	lookupDB, lookupCancel := scopedDB(c, ac.db, adminDBTimeout)
+	targetUser, err := models.GetUserByID(lookupDB, targetUserID)
+	lookupCancel()
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
@@ -517,6 +582,9 @@ func (ac *AdminController) GetAdminPermissions(c *fiber.Ctx) error {
 				"message":     "user not found",
 				"error":       "user not found",
 			})
+		}
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -533,8 +601,13 @@ func (ac *AdminController) GetAdminPermissions(c *fiber.Ctx) error {
 		})
 	}
 
-	permissions, err := models.ListPermissionStatesByUserID(ac.db, targetUserID, middleware.DefaultAdminPermissions)
+	permDB, permCancel := scopedDB(c, ac.db, adminDBTimeout)
+	permissions, err := models.ListPermissionStatesByUserID(permDB, targetUserID, middleware.DefaultAdminPermissions)
+	permCancel()
 	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "failed to fetch admin permissions",
@@ -564,7 +637,9 @@ func (ac *AdminController) UpdateAdminPermissions(c *fiber.Ctx) error {
 		})
 	}
 
-	targetUser, err := models.GetUserByID(ac.db, targetUserID)
+	lookupDB, lookupCancel := scopedDB(c, ac.db, adminDBTimeout)
+	targetUser, err := models.GetUserByID(lookupDB, targetUserID)
+	lookupCancel()
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
@@ -572,6 +647,9 @@ func (ac *AdminController) UpdateAdminPermissions(c *fiber.Ctx) error {
 				"message":     "user not found",
 				"error":       "user not found",
 			})
+		}
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -631,7 +709,13 @@ func (ac *AdminController) UpdateAdminPermissions(c *fiber.Ctx) error {
 		})
 	}
 
-	if err := models.ReplacePermissionStatesForUser(ac.db, targetUser.ID, replacementStates); err != nil {
+	replaceDB, replaceCancel := scopedDB(c, ac.db, adminWriteTxTimeout)
+	replaceErr := models.ReplacePermissionStatesForUser(replaceDB, targetUser.ID, replacementStates)
+	replaceCancel()
+	if replaceErr != nil {
+		if isDBBusyErr(replaceErr) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "failed to update admin permissions",
@@ -639,8 +723,15 @@ func (ac *AdminController) UpdateAdminPermissions(c *fiber.Ctx) error {
 		})
 	}
 
-	updated, err := models.ListPermissionStatesByUserID(ac.db, targetUser.ID, middleware.DefaultAdminPermissions)
+	middleware.InvalidateUserPermissionCache(targetUser.ID)
+
+	fetchDB, fetchCancel := scopedDB(c, ac.db, adminDBTimeout)
+	updated, err := models.ListPermissionStatesByUserID(fetchDB, targetUser.ID, middleware.DefaultAdminPermissions)
+	fetchCancel()
 	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "permissions updated but fetch failed",
@@ -661,12 +752,34 @@ func (ac *AdminController) UpdateAdminPermissions(c *fiber.Ctx) error {
 }
 
 func (ac *AdminController) GetStats(c *fiber.Ctx) error {
+	db, cancel := scopedDB(c, ac.db, adminDBTimeout)
+	defer cancel()
 
 	var totalUsers int64
-	ac.db.Model(&models.User{}).Count(&totalUsers)
+	if err := db.Model(&models.User{}).Count(&totalUsers).Error; err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
+		log.Printf("error counting total users: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch stats",
+			"error":       "failed to fetch stats",
+		})
+	}
 
 	var activeUsers int64
-	ac.db.Model(&models.User{}).Where("is_active = ?", true).Count(&activeUsers)
+	if err := db.Model(&models.User{}).Where("is_active = ?", true).Count(&activeUsers).Error; err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
+		log.Printf("error counting active users: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to fetch stats",
+			"error":       "failed to fetch stats",
+		})
+	}
 
 	connectedClients := ac.socketHub.GetClientCount()
 
@@ -682,43 +795,39 @@ func (ac *AdminController) GetStats(c *fiber.Ctx) error {
 }
 
 func (ac *AdminController) GetActivityLogs(c *fiber.Ctx) error {
-	page := 1
-	if rawPage := strings.TrimSpace(c.Query("page")); rawPage != "" {
-		parsed, err := strconv.Atoi(rawPage)
-		if err != nil || parsed < 1 {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"status_code": fiber.StatusBadRequest,
-				"message":     "page must be a positive integer",
-				"error":       "page must be a positive integer",
-			})
-		}
-		page = parsed
+	page, limit, err := parsePageLimit(c, 20, 200)
+	if err != nil {
+		return err
 	}
 
-	limit := 20
-	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
-		parsed, err := strconv.Atoi(rawLimit)
-		if err != nil || parsed < 1 {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"status_code": fiber.StatusBadRequest,
-				"message":     "limit must be a positive integer",
-				"error":       "limit must be a positive integer",
-			})
-		}
-		if parsed > 200 {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"status_code": fiber.StatusBadRequest,
-				"message":     "limit must be less than or equal to 200",
-				"error":       "limit must be less than or equal to 200",
-			})
-		}
-		limit = parsed
+	// Length-bound every free-text search parameter. Without these,
+	// a client can pass a 10 MB string and make Postgres do an ILIKE
+	// across every row of the audit log — which then eats the pool.
+	userIDFilter := strings.TrimSpace(c.Query("user_id"))
+	if len(userIDFilter) > 64 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "user_id is too long",
+			"error":       "user_id is too long",
+		})
 	}
 
-	query := ac.db.Model(&models.AdminAPIAuditLog{})
+	pathFilter := strings.TrimSpace(c.Query("path"))
+	if len(pathFilter) > 200 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "path filter is too long",
+			"error":       "path filter is too long",
+		})
+	}
 
-	if userID := strings.TrimSpace(c.Query("user_id")); userID != "" {
-		query = query.Where("user_id = ?", userID)
+	db, cancel := scopedDB(c, ac.db, adminAnalyticsTimeout)
+	defer cancel()
+
+	query := db.Model(&models.AdminAPIAuditLog{})
+
+	if userIDFilter != "" {
+		query = query.Where("user_id = ?", userIDFilter)
 	}
 	if role := strings.ToUpper(strings.TrimSpace(c.Query("role"))); role != "" {
 		query = query.Where("role = ?", role)
@@ -726,8 +835,8 @@ func (ac *AdminController) GetActivityLogs(c *fiber.Ctx) error {
 	if method := strings.ToUpper(strings.TrimSpace(c.Query("method"))); method != "" {
 		query = query.Where("method = ?", method)
 	}
-	if path := strings.TrimSpace(c.Query("path")); path != "" {
-		query = query.Where("path ILIKE ?", "%"+path+"%")
+	if pathFilter != "" {
+		query = query.Where("path ILIKE ?", "%"+pathFilter+"%")
 	}
 	if statusCodeRaw := strings.TrimSpace(c.Query("status_code")); statusCodeRaw != "" {
 		statusCode, err := strconv.Atoi(statusCodeRaw)
@@ -767,6 +876,9 @@ func (ac *AdminController) GetActivityLogs(c *fiber.Ctx) error {
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "failed to fetch activity logs",
@@ -777,6 +889,9 @@ func (ac *AdminController) GetActivityLogs(c *fiber.Ctx) error {
 	offset := (page - 1) * limit
 	var logs []models.AdminAPIAuditLog
 	if err := query.Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error; err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "failed to fetch activity logs",

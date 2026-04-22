@@ -514,8 +514,16 @@ func ConnectDatabase() {
 		return
 	}
 
+	// statement_timeout / lock_timeout / idle_in_transaction_session_timeout
+	// are applied server-side. Any query that runs longer than
+	// statement_timeout is cancelled by Postgres and the connection is
+	// returned to the pool. This is the single biggest safety net against
+	// analytics queries wedging the pool and blocking every /api/* request
+	// behind middleware.UserAuth.
 	dsn := fmt.Sprintf(
-		"host=%s user=%s password=%s dbname=%s port=%s sslmode=%s",
+		"host=%s user=%s password=%s dbname=%s port=%s sslmode=%s "+
+			"statement_timeout=25000 lock_timeout=5000 "+
+			"idle_in_transaction_session_timeout=15000",
 		App.Database.Host,
 		App.Database.User,
 		App.Database.Password,
@@ -536,7 +544,12 @@ func ConnectDatabase() {
 		log.Fatal("failed to access sql database: ", err)
 	}
 
-	sqlDB.SetMaxOpenConns(25)
+	// 25 was the previous value and proved too tight: two slow analytics
+	// queries plus the tick-event batcher could saturate the pool and
+	// wedge every /api/* request behind middleware.UserAuth (which does
+	// an un-timeboxed GetUserByID). 50 gives reasonable headroom on a
+	// 4GB box; each pq conn is ~1–2MB so the worst case is ~100MB.
+	sqlDB.SetMaxOpenConns(50)
 	sqlDB.SetMaxIdleConns(10)
 	sqlDB.SetConnMaxLifetime(30 * time.Minute)
 	sqlDB.SetConnMaxIdleTime(5 * time.Minute)

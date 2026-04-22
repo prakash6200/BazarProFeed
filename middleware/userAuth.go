@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strings"
@@ -12,6 +13,14 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
 )
+
+// authDBTimeout bounds the GetUserByID lookup that runs on every
+// /api/* request. Without this, a saturated Postgres pool causes
+// sql.DB.conn() to block indefinitely — every authenticated request
+// pins a fasthttp worker forever and the server becomes unresponsive
+// while the port stays open. Failing fast (503) is the only way to
+// let the pool recover under pressure.
+const authDBTimeout = 2 * time.Second
 
 type UserJWTClaims struct {
 	UserID   string `json:"user_id"`
@@ -103,13 +112,22 @@ func UserAuth(db *gorm.DB) fiber.Handler {
 			})
 		}
 
-		user, err := models.GetUserByID(db, claims.UserID)
+		lookupCtx, cancel := context.WithTimeout(c.UserContext(), authDBTimeout)
+		user, err := models.GetUserByID(db.WithContext(lookupCtx), claims.UserID)
+		cancel()
 		if err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 					"status_code": fiber.StatusUnauthorized,
 					"message":     "invalid token",
 					"error":       "invalid token",
+				})
+			}
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+					"status_code": fiber.StatusServiceUnavailable,
+					"message":     "authentication service busy",
+					"error":       "authentication service busy",
 				})
 			}
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{

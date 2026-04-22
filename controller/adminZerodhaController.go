@@ -66,7 +66,10 @@ func (azc *AdminZerodhaController) UpdateSession(c *fiber.Ctx) error {
 }
 
 func (azc *AdminZerodhaController) GetSessionStatus(c *fiber.Ctx) error {
-	session, err := models.GetActiveZerodhaSession(azc.db)
+	db, cancel := scopedDB(c, azc.db, adminDBTimeout)
+	defer cancel()
+
+	session, err := models.GetActiveZerodhaSession(db)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return c.Status(fiber.StatusOK).JSON(fiber.Map{
@@ -74,6 +77,9 @@ func (azc *AdminZerodhaController) GetSessionStatus(c *fiber.Ctx) error {
 				"message":     "zerodha session is not configured",
 				"configured":  false,
 			})
+		}
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(dbBusyJSON())
 		}
 
 		log.Printf("failed to fetch zerodha session status: %v", err)

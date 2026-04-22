@@ -55,13 +55,43 @@ func GrantPermission(db *gorm.DB, userID, permission string) error {
 	}).Create(&entry).Error
 }
 
+// GrantPermissions writes the full set in one round-trip using ON
+// CONFLICT DO UPDATE. The previous per-permission loop executed one
+// INSERT per permission, which — under a saturated pool — would
+// compound into dozens of round-trips per admin request and block the
+// request path for seconds. Using a single batched upsert keeps this
+// O(1) round-trips regardless of how many permissions are granted.
 func GrantPermissions(db *gorm.DB, userID string, permissions []string) error {
-	for _, permission := range permissions {
-		if err := GrantPermission(db, userID, permission); err != nil {
-			return err
-		}
+	if strings.TrimSpace(userID) == "" || len(permissions) == 0 {
+		return nil
 	}
-	return nil
+	seen := make(map[string]struct{}, len(permissions))
+	entries := make([]AdminPermission, 0, len(permissions))
+	for _, permission := range permissions {
+		norm := normalizePermission(permission)
+		if norm == "" {
+			continue
+		}
+		if _, ok := seen[norm]; ok {
+			continue
+		}
+		seen[norm] = struct{}{}
+		entries = append(entries, AdminPermission{
+			UserID:     userID,
+			Permission: norm,
+			IsAllowed:  true,
+		})
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	return db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "permission"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"is_allowed": true,
+			"updated_at": time.Now(),
+		}),
+	}).Create(&entries).Error
 }
 
 func ListPermissionsByUserID(db *gorm.DB, userID string) ([]string, error) {
@@ -116,37 +146,43 @@ func ReplacePermissionsForUser(db *gorm.DB, userID string, permissions []string)
 	return ReplacePermissionStatesForUser(db, userID, states)
 }
 
+// ReplacePermissionStatesForUser wipes the user's permissions and
+// re-inserts the provided states inside a single transaction. The
+// insert is batched (GORM Create on a slice emits a single multi-row
+// INSERT) so this is always 2 round-trips regardless of permission
+// count — the previous implementation issued one INSERT per state,
+// which on the request path with a saturated pool can wedge fasthttp
+// workers indefinitely.
 func ReplacePermissionStatesForUser(db *gorm.DB, userID string, states []PermissionState) error {
 	if strings.TrimSpace(userID) == "" {
 		return nil
 	}
 
-	tx := db.Begin()
-	if tx.Error != nil {
-		return tx.Error
-	}
-
-	if err := tx.Where("user_id = ?", userID).Delete(&AdminPermission{}).Error; err != nil {
-		_ = tx.Rollback().Error
-		return err
-	}
-
+	seen := make(map[string]struct{}, len(states))
+	entries := make([]AdminPermission, 0, len(states))
 	for _, state := range states {
 		norm := normalizePermission(state.Permission)
 		if norm == "" {
 			continue
 		}
-		entry := AdminPermission{UserID: userID, Permission: norm, IsAllowed: state.Allowed}
-		if err := tx.Create(&entry).Error; err != nil {
-			_ = tx.Rollback().Error
+		if _, ok := seen[norm]; ok {
+			continue
+		}
+		seen[norm] = struct{}{}
+		entries = append(entries, AdminPermission{
+			UserID:     userID,
+			Permission: norm,
+			IsAllowed:  state.Allowed,
+		})
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("user_id = ?", userID).Delete(&AdminPermission{}).Error; err != nil {
 			return err
 		}
-	}
-
-	if err := tx.Commit().Error; err != nil {
-		_ = tx.Rollback().Error
-		return err
-	}
-
-	return nil
+		if len(entries) == 0 {
+			return nil
+		}
+		return tx.Create(&entries).Error
+	})
 }

@@ -11,7 +11,21 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const redisQueueMaxLen = 20000
+const (
+	redisQueueMaxLen = 20000
+
+	// Local buffer between the hot feed goroutine and the Redis RPush
+	// worker. Enqueue() is lock-free and NEVER blocks the tick path.
+	redisLocalQueueSize = 20000
+
+	// Soft deadline for each Redis RPush/LLen attempt issued by the
+	// writer goroutine. Kept short so Redis outages cannot wedge the
+	// pipeline — items are simply dropped until Redis recovers.
+	redisWriteTimeout = 2 * time.Second
+
+	// Number of items coalesced into a single RPUSH pipeline call.
+	redisWriteBatch = 200
+)
 
 type RedisTickEventBatcher[T any] struct {
 	name       string
@@ -20,7 +34,14 @@ type RedisTickEventBatcher[T any] struct {
 	flushEvery time.Duration
 	batchSize  int
 	flushFn    func([]T) error
-	startOnce  sync.Once
+
+	startOnce sync.Once
+
+	// localQueue buffers marshalled payloads on the producer side so the
+	// hot feed loop never waits on Redis. The writer goroutine drains
+	// this channel and pushes to Redis in the background.
+	localQueue chan []byte
+	dropped    uint64
 }
 
 func NewRedisTickEventBatcher[T any](name, queueKey string, client *redis.Client, flushEvery time.Duration, batchSize int, flushFn func([]T) error) *RedisTickEventBatcher[T] {
@@ -37,6 +58,7 @@ func NewRedisTickEventBatcher[T any](name, queueKey string, client *redis.Client
 		flushEvery: flushEvery,
 		batchSize:  batchSize,
 		flushFn:    flushFn,
+		localQueue: make(chan []byte, redisLocalQueueSize),
 	}
 }
 
@@ -45,10 +67,14 @@ func (b *RedisTickEventBatcher[T]) Start(ctx context.Context) {
 		return
 	}
 	b.startOnce.Do(func() {
-		go b.run(ctx)
+		go b.producerLoop(ctx)
+		go b.consumerLoop(ctx)
 	})
 }
 
+// Enqueue is lock-free and never blocks. If the local buffer is full the
+// event is silently dropped — it is far better to lose a tick than to
+// stall the WebSocket reader goroutine.
 func (b *RedisTickEventBatcher[T]) Enqueue(item T) {
 	if b == nil || b.client == nil || b.queueKey == "" {
 		return
@@ -59,19 +85,67 @@ func (b *RedisTickEventBatcher[T]) Enqueue(item T) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	qLen, err := b.client.LLen(ctx, b.queueKey).Result()
-	if err == nil && qLen >= redisQueueMaxLen {
-		log.Printf("%s redis queue full (len=%d), dropping event", b.name, qLen)
-		return
-	}
-	if err := b.client.RPush(ctx, b.queueKey, payload).Err(); err != nil {
-		log.Printf("%s redis enqueue failed: %v", b.name, err)
+	select {
+	case b.localQueue <- payload:
+	default:
+		// Local buffer full — Redis writer is lagging. Drop.
+		if b.dropped++; b.dropped%1000 == 1 {
+			log.Printf("%s local queue full (cap=%d), dropped=%d", b.name, cap(b.localQueue), b.dropped)
+		}
 	}
 }
 
-func (b *RedisTickEventBatcher[T]) run(ctx context.Context) {
+// producerLoop pulls marshalled items off the local buffer and pushes
+// them to Redis in batches. Redis slowness only affects this goroutine
+// — it can never back-pressure the feed reader.
+func (b *RedisTickEventBatcher[T]) producerLoop(ctx context.Context) {
+	batch := make([][]byte, 0, redisWriteBatch)
+	flushTicker := time.NewTicker(200 * time.Millisecond)
+	defer flushTicker.Stop()
+
+	push := func() {
+		if len(batch) == 0 {
+			return
+		}
+		writeCtx, cancel := context.WithTimeout(context.Background(), redisWriteTimeout)
+		// Cheap length check so a backed-up queue doesn't grow unbounded.
+		if qLen, err := b.client.LLen(writeCtx, b.queueKey).Result(); err == nil && qLen >= redisQueueMaxLen {
+			cancel()
+			log.Printf("%s redis queue full (len=%d), dropping batch=%d", b.name, qLen, len(batch))
+			batch = batch[:0]
+			return
+		}
+		args := make([]interface{}, len(batch))
+		for i, p := range batch {
+			args[i] = p
+		}
+		if err := b.client.RPush(writeCtx, b.queueKey, args...).Err(); err != nil {
+			log.Printf("%s redis RPush failed (size=%d): %v", b.name, len(batch), err)
+		}
+		cancel()
+		batch = batch[:0]
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			push()
+			return
+		case item := <-b.localQueue:
+			batch = append(batch, item)
+			if len(batch) >= redisWriteBatch {
+				push()
+			}
+		case <-flushTicker.C:
+			push()
+		}
+	}
+}
+
+// consumerLoop drains the Redis queue on a separate goroutine and
+// periodically flushes to Postgres via flushFn. Redis BLPop is done
+// with a short timeout so ctx cancellation is honoured promptly.
+func (b *RedisTickEventBatcher[T]) consumerLoop(ctx context.Context) {
 	ticker := time.NewTicker(b.flushEvery)
 	defer ticker.Stop()
 

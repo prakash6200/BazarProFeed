@@ -47,6 +47,7 @@ type GlobalMarketFeedService struct {
 	lastClosedBroadcast atomic.Int64
 	recentMu            sync.RWMutex
 	recentBySym         map[string][]NormalizedTick
+	running             atomic.Bool
 }
 
 type globalInstrumentMeta struct {
@@ -132,7 +133,15 @@ func NewGlobalMarketFeedService(db *gorm.DB, redisCache *RedisTickCache) *Global
 	return svc
 }
 
+// Start boots the feed exactly once. A second call is a no-op — this
+// guards against an accidental re-Start (e.g. on admin refresh) from
+// spawning a duplicate connectAndRunLoop that would race with the
+// existing goroutine on g.conn and make the feed state nondet.
 func (g *GlobalMarketFeedService) Start(ctx context.Context, tickHub *TickHub) {
+	if !g.running.CompareAndSwap(false, true) {
+		log.Printf("global market feed: Start called twice, ignoring")
+		return
+	}
 	g.ctx, g.cancel = context.WithCancel(ctx)
 	g.tickHub = tickHub
 	if g.events != nil {
@@ -191,8 +200,15 @@ func (g *GlobalMarketFeedService) connectAndRunLoop(tickHub *TickHub) {
 		}
 		g.conn = conn
 		g.writeMu.Unlock()
-		g.syncActiveSymbolsToRedis(g.ctx)
 
+		// Best-effort side effects — run in background so a slow DB
+		// or Redis cannot wedge the reconnect loop.
+		go g.syncActiveSymbolsToRedis(g.ctx)
+
+		// subscriptionSymbols loads instrument metadata & the active
+		// symbol list from DB; keep it on this goroutine because the
+		// subsequent Subscribe() depends on the result, but it uses a
+		// bounded context timeout internally.
 		symbols := g.subscriptionSymbols()
 		if len(symbols) == 0 {
 			log.Printf("global market feed: no symbols available for subscription")
@@ -336,10 +352,10 @@ func (g *GlobalMarketFeedService) readLoop(tickHub *TickHub) {
 			tickHub.Publish(updated)
 		}
 		g.recordRecentTick(updated)
-		if g.redisCache != nil && g.ctx != nil && g.ctx.Err() == nil {
-			cacheCtx, cacheCancel := context.WithTimeout(g.ctx, 2*time.Second)
-			g.redisCache.Set(cacheCtx, GlobalTickPrefix, updated)
-			cacheCancel()
+		// Fire-and-forget Redis cache write — never blocks the reader
+		// even under Redis back-pressure.
+		if g.redisCache != nil {
+			g.redisCache.SetAsyncWithPrefix(GlobalTickPrefix, updated)
 		}
 	}
 }
@@ -711,7 +727,9 @@ func (g *GlobalMarketFeedService) syncActiveSymbolsToRedis(ctx context.Context) 
 	if g.db == nil || g.redisCache == nil {
 		return
 	}
-	active, err := models.GetActiveGlobalInstrumentSymbols(g.db)
+	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	active, err := models.GetActiveGlobalInstrumentSymbols(g.db.WithContext(queryCtx))
 	if err != nil {
 		log.Printf("global market feed: failed to sync active symbols to redis: %v", err)
 		return
@@ -743,7 +761,10 @@ func (g *GlobalMarketFeedService) RefreshFromDatabase(ctx context.Context) error
 	}
 	g.loadInstrumentMeta()
 
-	active, err := models.GetActiveGlobalInstrumentSymbols(g.db)
+	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	active, err := models.GetActiveGlobalInstrumentSymbols(g.db.WithContext(queryCtx))
 	if err != nil {
 		return fmt.Errorf("load active symbols failed: %w", err)
 	}
@@ -852,13 +873,15 @@ func msToTimeOrNow(v interface{}, fallback time.Time) time.Time {
 }
 
 func (g *GlobalMarketFeedService) Subscribe(symbols []string) error {
-	if g.db != nil {
-		g.loadInstrumentMeta()
-	}
 	symbols = uniqueSymbols(symbols)
 	if len(symbols) == 0 {
 		return nil
 	}
+	// NOTE: instrument metadata is reloaded by RefreshFromDatabase and
+	// by the reconnect loop outside of Subscribe. Do NOT run a
+	// synchronous DB query here — Subscribe is called from the single
+	// reconnect / readLoop goroutine and a slow DB query would stall
+	// the entire feed.
 	msg := map[string]interface{}{
 		"event":   "subscribe",
 		"symbols": symbols,

@@ -8,6 +8,12 @@ import (
 	"gorm.io/gorm"
 )
 
+// globalTickAggRowCap bounds how many raw tick payloads we aggregate
+// into a single candle bucket. See zerodhaTickAggRowCap for rationale
+// — without this, a fast-moving symbol can OOM the Postgres backend
+// on a jsonb_agg call and take the pool (and the API) down with it.
+const globalTickAggRowCap = 10000
+
 type GlobalTickEvent struct {
 	ID        string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
 	Exchange  string    `gorm:"type:text;index" json:"exchange"`
@@ -266,16 +272,24 @@ func ListGlobalCandleTicksLast24h(db *gorm.DB, intervalMinutes, page, sizePerPag
 				END AS tick_ts
 			FROM global_tick_events
 			` + whereSQL + `
+		), capped AS (
+			SELECT exchange, symbol, payload, tick_ts
+			FROM filtered
+			ORDER BY tick_ts ASC
+			LIMIT ?
 		)
 		SELECT
 			MAX(exchange) AS exchange,
 			MAX(symbol) AS symbol,
-			COUNT(*) AS tick_count,
+			(SELECT COUNT(*) FROM filtered) AS tick_count,
 			COALESCE(jsonb_agg(payload ORDER BY tick_ts ASC), '[]'::jsonb) AS ticks
-		FROM filtered`
+		FROM capped`
+
+		directArgs := append([]interface{}{}, args...)
+		directArgs = append(directArgs, globalTickAggRowCap)
 
 		var row directRow
-		if err := db.Raw(directSQL, args...).Scan(&row).Error; err != nil {
+		if err := db.Raw(directSQL, directArgs...).Scan(&row).Error; err != nil {
 			return nil, 0, err
 		}
 		if row.TickCount == 0 {
@@ -335,7 +349,12 @@ func ListGlobalCandleTicksLast24h(db *gorm.DB, intervalMinutes, page, sizePerPag
 		` + whereSQL + `
 	), bucketed AS (
 		SELECT exchange, symbol, payload, tick_ts,
-			` + bucketExpr + ` AS interval_start
+			` + bucketExpr + ` AS interval_start,
+			ROW_NUMBER() OVER (
+				PARTITION BY exchange, symbol,
+					` + bucketExpr + `
+				ORDER BY tick_ts ASC
+			) AS rn
 		FROM filtered
 	), grouped AS (
 		SELECT
@@ -343,7 +362,7 @@ func ListGlobalCandleTicksLast24h(db *gorm.DB, intervalMinutes, page, sizePerPag
 			symbol,
 			interval_start,
 			COUNT(*) AS tick_count,
-			jsonb_agg(payload ORDER BY tick_ts ASC) AS ticks
+			jsonb_agg(payload ORDER BY tick_ts ASC) FILTER (WHERE rn <= ?) AS ticks
 		FROM bucketed
 		GROUP BY exchange, symbol, interval_start
 	)
@@ -353,7 +372,11 @@ func ListGlobalCandleTicksLast24h(db *gorm.DB, intervalMinutes, page, sizePerPag
 	OFFSET ? LIMIT ?`
 
 	dataArgs := append([]interface{}{}, args...)
-	dataArgs = append(dataArgs, intervalMinutes, intervalMinutes, offset, sizePerPage)
+	dataArgs = append(dataArgs,
+		intervalMinutes, intervalMinutes,
+		intervalMinutes, intervalMinutes,
+		globalTickAggRowCap,
+		offset, sizePerPage)
 
 	type row struct {
 		Exchange      string    `gorm:"column:exchange"`

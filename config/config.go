@@ -9,8 +9,9 @@ import (
 )
 
 type ServerConfig struct {
-	Host string
-	Port string
+	Host         string
+	Port         string
+	AllowOrigins string
 }
 
 type DatabaseConfig struct {
@@ -62,8 +63,9 @@ func LoadConfig() {
 
 		App = Configuration{
 			Server: ServerConfig{
-				Host: getEnv("SERVER_HOST", "0.0.0.0"),
-				Port: getEnv("SERVER_PORT", "8080"),
+				Host:         getEnv("SERVER_HOST", "0.0.0.0"),
+				Port:         getEnv("SERVER_PORT", "8080"),
+				AllowOrigins: getEnv("CORS_ALLOW_ORIGINS", "*"),
 			},
 			Database: DatabaseConfig{
 				Host:     getEnv("DB_HOST", "localhost"),

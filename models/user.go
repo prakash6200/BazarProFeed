@@ -170,6 +170,28 @@ func GetAllUsers(db *gorm.DB) ([]User, error) {
 	return users, err
 }
 
+// GetAllUsersPaginated returns one page of users plus the total
+// count. The previous unbounded GetAllUsers could load millions of
+// rows in a single query, blow GORM's row scanner's memory, and pin
+// the pool for seconds — which in turn made the API port stop
+// responding.
+func GetAllUsersPaginated(db *gorm.DB, page, limit int) ([]User, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	var total int64
+	if err := db.Model(&User{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	offset := (page - 1) * limit
+	var users []User
+	err := db.Order("created_at DESC").Offset(offset).Limit(limit).Find(&users).Error
+	return users, total, err
+}
+
 func UpdateUserStatus(db *gorm.DB, id string, isActive bool) error {
 	return db.Model(&User{}).Where("id = ?", id).Update("is_active", isActive).Error
 }

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"feedprovider/config"
 	"feedprovider/middleware"
@@ -13,6 +14,43 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
 )
+
+// Soft request-level deadlines. Every DB call the user controller
+// makes gets wrapped with one of these so a stalled analytics query
+// (or a saturated pool) cannot pin a fasthttp worker forever. The
+// hard cap is enforced server-side by the Postgres statement_timeout
+// configured in config/database.go; these values simply fail the
+// request a little earlier so the client gets a clean 503.
+const (
+	authDBTimeout      = 2 * time.Second
+	instrumentsTimeout = 5 * time.Second
+	analyticsTimeout   = 20 * time.Second
+)
+
+// scopedDB derives a bounded context from the in-flight request and
+// returns the DB handle bound to it. If the client disconnects or
+// the deadline fires, the underlying SQL driver will abort the query
+// and release the Postgres connection back to the pool.
+func scopedDB(c *fiber.Ctx, db *gorm.DB, d time.Duration) (*gorm.DB, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(c.UserContext(), d)
+	return db.WithContext(ctx), cancel
+}
+
+// isDBBusyErr reports whether the error indicates the pool or query
+// was bounded out (deadline, cancellation, or Postgres statement
+// timeout). These should be surfaced as 503, not 500, because the
+// correct client behaviour is to retry with backoff.
+func isDBBusyErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "canceling statement due to statement timeout") ||
+		strings.Contains(msg, "canceling statement due to user request")
+}
 
 type UserController struct {
 	db        *gorm.DB
@@ -63,14 +101,23 @@ func NewUserController(db *gorm.DB, socketHub *config.SocketHub) *UserController
 func (uc *UserController) Signup(c *fiber.Ctx) error {
 	req := c.Locals("validated_request").(validator.SignupRequest)
 
-	if _, err := models.GetUserByUsername(uc.db, req.Username); err == nil {
+	lookupDB, lookupCancel := scopedDB(c, uc.db, authDBTimeout)
+	_, existsErr := models.GetUserByUsername(lookupDB, req.Username)
+	lookupCancel()
+	if existsErr == nil {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
 			"status_code": fiber.StatusConflict,
 			"message":     "username already exists",
 			"error":       "username already exists",
 		})
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		log.Printf("error checking existing username: %v", err)
+	} else if isDBBusyErr(existsErr) {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"status_code": fiber.StatusServiceUnavailable,
+			"message":     "signup service busy",
+			"error":       "signup service busy",
+		})
+	} else if !errors.Is(existsErr, gorm.ErrRecordNotFound) {
+		log.Printf("error checking existing username: %v", existsErr)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
 			"message":     "failed to validate username",
@@ -78,7 +125,9 @@ func (uc *UserController) Signup(c *fiber.Ctx) error {
 		})
 	}
 
-	user, err := models.CreateUserWithPassword(uc.db, req.Username, req.Password, models.RoleUser)
+	createDB, createCancel := scopedDB(c, uc.db, instrumentsTimeout)
+	user, err := models.CreateUserWithPassword(createDB, req.Username, req.Password, models.RoleUser)
+	createCancel()
 	if err != nil {
 		log.Printf("error creating user signup: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -114,13 +163,22 @@ func (uc *UserController) Signup(c *fiber.Ctx) error {
 func (uc *UserController) Login(c *fiber.Ctx) error {
 	req := c.Locals("validated_request").(validator.LoginRequest)
 
-	user, err := models.GetUserByUsername(uc.db, req.Username)
+	lookupDB, lookupCancel := scopedDB(c, uc.db, authDBTimeout)
+	user, err := models.GetUserByUsername(lookupDB, req.Username)
+	lookupCancel()
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"status_code": fiber.StatusUnauthorized,
 				"message":     "invalid credentials",
 				"error":       "invalid credentials",
+			})
+		}
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"status_code": fiber.StatusServiceUnavailable,
+				"message":     "login service busy",
+				"error":       "login service busy",
 			})
 		}
 		log.Printf("error fetching user by username: %v", err)
@@ -147,7 +205,17 @@ func (uc *UserController) Login(c *fiber.Ctx) error {
 		})
 	}
 
-	if err := user.RefreshToken(uc.db); err != nil {
+	refreshDB, refreshCancel := scopedDB(c, uc.db, authDBTimeout)
+	err = user.RefreshToken(refreshDB)
+	refreshCancel()
+	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"status_code": fiber.StatusServiceUnavailable,
+				"message":     "login service busy",
+				"error":       "login service busy",
+			})
+		}
 		log.Printf("error refreshing token on login for user %s: %v", user.Username, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -223,7 +291,17 @@ func (uc *UserController) RefreshToken(c *fiber.Ctx) error {
 
 	uc.socketHub.CloseUserConnections(user.ID)
 
-	if err := user.RefreshToken(uc.db); err != nil {
+	refreshDB, refreshCancel := scopedDB(c, uc.db, authDBTimeout)
+	err := user.RefreshToken(refreshDB)
+	refreshCancel()
+	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"status_code": fiber.StatusServiceUnavailable,
+				"message":     "token service busy",
+				"error":       "token service busy",
+			})
+		}
 		log.Printf("error refreshing token for user %s: %v", user.Username, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -285,7 +363,8 @@ func (uc *UserController) ChangePassword(c *fiber.Ctx) error {
 		})
 	}
 
-	err = uc.db.Transaction(func(tx *gorm.DB) error {
+	txDB, txCancel := scopedDB(c, uc.db, instrumentsTimeout)
+	err = txDB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&models.User{}).Where("id = ?", user.ID).Update("password_hash", newPasswordHash).Error; err != nil {
 			return err
 		}
@@ -296,7 +375,15 @@ func (uc *UserController) ChangePassword(c *fiber.Ctx) error {
 
 		return nil
 	})
+	txCancel()
 	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"status_code": fiber.StatusServiceUnavailable,
+				"message":     "password service busy",
+				"error":       "password service busy",
+			})
+		}
 		log.Printf("error changing password for user %s: %v", user.Username, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -327,8 +414,17 @@ func (uc *UserController) GetZerodhaInstruments(c *fiber.Ctx) error {
 		SortOrder:      query.SortOrder,
 	}
 
-	instruments, total, err := models.GetInstrumentsPaginated(uc.db, query.Page, query.Limit, false, filters)
+	db, cancel := scopedDB(c, uc.db, instrumentsTimeout)
+	instruments, total, err := models.GetInstrumentsPaginated(db, query.Page, query.Limit, false, filters)
+	cancel()
 	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"status_code": fiber.StatusServiceUnavailable,
+				"message":     "instruments service busy",
+				"error":       "instruments service busy",
+			})
+		}
 		log.Printf("error fetching paginated instruments for user: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -378,8 +474,17 @@ func (uc *UserController) GetGlobalInstruments(c *fiber.Ctx) error {
 		SortOrder:      query.SortOrder,
 	}
 
-	instruments, total, err := models.GetGlobalInstrumentsPaginated(uc.db, query.Page, query.Limit, false, filters)
+	db, cancel := scopedDB(c, uc.db, instrumentsTimeout)
+	instruments, total, err := models.GetGlobalInstrumentsPaginated(db, query.Page, query.Limit, false, filters)
+	cancel()
 	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"status_code": fiber.StatusServiceUnavailable,
+				"message":     "instruments service busy",
+				"error":       "instruments service busy",
+			})
+		}
 		log.Printf("error fetching paginated global instruments for user: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -471,10 +576,19 @@ func (uc *UserController) GetGlobalCandles(c *fiber.Ctx) error {
 		})
 	}
 
-	rows, total, err := models.ListGlobalCandlesLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.GlobalTickQueryFilters{
+	db, cancel := scopedDB(c, uc.db, analyticsTimeout)
+	rows, total, err := models.ListGlobalCandlesLast24h(db, intervalMinutes, req.Page, req.SizePerPage, models.GlobalTickQueryFilters{
 		Symbol: req.Symbol,
 	})
+	cancel()
 	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"status_code": fiber.StatusServiceUnavailable,
+				"message":     "analytics query timed out; please retry",
+				"error":       "analytics query timed out",
+			})
+		}
 		log.Printf("error fetching global candles: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -565,12 +679,21 @@ func (uc *UserController) GetGlobalRawTicks(c *fiber.Ctx) error {
 	intervalStartPtr = &start
 	intervalEndPtr = &end
 
-	candleTicks, total, err := models.ListGlobalCandleTicksLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.GlobalTickQueryFilters{
+	db, cancel := scopedDB(c, uc.db, analyticsTimeout)
+	candleTicks, total, err := models.ListGlobalCandleTicksLast24h(db, intervalMinutes, req.Page, req.SizePerPage, models.GlobalTickQueryFilters{
 		Symbol:        req.Symbol,
 		IntervalStart: intervalStartPtr,
 		IntervalEnd:   intervalEndPtr,
 	})
+	cancel()
 	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"status_code": fiber.StatusServiceUnavailable,
+				"message":     "analytics query timed out; please retry",
+				"error":       "analytics query timed out",
+			})
+		}
 		log.Printf("error fetching global candle ticks: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -651,10 +774,19 @@ func (uc *UserController) GetZerodhaCandles(c *fiber.Ctx) error {
 		})
 	}
 
-	rows, total, err := models.ListZerodhaCandlesLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.ZerodhaTickQueryFilters{
+	db, cancel := scopedDB(c, uc.db, analyticsTimeout)
+	rows, total, err := models.ListZerodhaCandlesLast24h(db, intervalMinutes, req.Page, req.SizePerPage, models.ZerodhaTickQueryFilters{
 		Symbol: req.Symbol,
 	})
+	cancel()
 	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"status_code": fiber.StatusServiceUnavailable,
+				"message":     "analytics query timed out; please retry",
+				"error":       "analytics query timed out",
+			})
+		}
 		log.Printf("error fetching zerodha candles: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,
@@ -755,12 +887,21 @@ func (uc *UserController) GetZerodhaRawTicks(c *fiber.Ctx) error {
 		intervalEndPtr = &end
 	}
 
-	candleTicks, total, err := models.ListZerodhaCandleTicksLast24h(uc.db, intervalMinutes, req.Page, req.SizePerPage, models.ZerodhaTickQueryFilters{
+	db, cancel := scopedDB(c, uc.db, analyticsTimeout)
+	candleTicks, total, err := models.ListZerodhaCandleTicksLast24h(db, intervalMinutes, req.Page, req.SizePerPage, models.ZerodhaTickQueryFilters{
 		Symbol:        req.Symbol,
 		IntervalStart: intervalStartPtr,
 		IntervalEnd:   intervalEndPtr,
 	})
+	cancel()
 	if err != nil {
+		if isDBBusyErr(err) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"status_code": fiber.StatusServiceUnavailable,
+				"message":     "analytics query timed out; please retry",
+				"error":       "analytics query timed out",
+			})
+		}
 		log.Printf("error fetching zerodha candle ticks: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status_code": fiber.StatusInternalServerError,

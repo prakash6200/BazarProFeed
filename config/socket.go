@@ -7,7 +7,6 @@ import (
 	"feedprovider/models"
 	"log"
 	"os"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +24,13 @@ const (
 	socketReadWait       = 60 * time.Second
 	socketMaxBulkFilters = 1000
 	clientSendBuffer     = 256
+
+	// Hard cap on concurrent WebSocket clients PER HUB. Each client
+	// holds two goroutines and one FD; without a cap a misbehaving or
+	// abusive peer could spawn connections until the process runs out
+	// of file descriptors — at which point accept() starts failing
+	// silently and the port "stays open" but nothing responds.
+	socketMaxClients = 5000
 )
 
 type socketClient struct {
@@ -110,16 +116,23 @@ func (c *socketClient) writePump() {
 	}
 }
 
+// close signals the writePump to exit and closes the underlying
+// connection. It MUST NOT acquire c.mu — writePump holds that lock
+// while executing WriteMessage (up to socketWriteWait = 10s), and a
+// caller waiting on c.mu here would stall the goroutine that invoked
+// close (typically the broadcast loop via removeClient).
+//
+// conn.Close is safe for concurrent use with writes in
+// fasthttp/websocket; the ongoing WriteMessage will return an error
+// and the writePump will exit through its defer.
 func (c *socketClient) close() {
 	select {
 	case <-c.done:
-		// already closed
+		return // already closed
 	default:
 		close(c.done)
 	}
-	c.mu.Lock()
 	_ = c.conn.Close()
-	c.mu.Unlock()
 }
 
 func (h *SocketHub) RegisterRoutes(app *fiber.App, path string) {
@@ -162,7 +175,12 @@ func (h *SocketHub) RegisterRoutes(app *fiber.App, path string) {
 		}
 
 		client := newSocketClient(c, token, user.ID, nil)
-		h.addClient(client)
+		if !h.addClient(client) {
+			log.Printf("websocket connection rejected: hub at capacity (max=%d)", socketMaxClients)
+			_ = c.WriteJSON(fiber.Map{"status_code": fiber.StatusServiceUnavailable, "error": "server at capacity, try again later"})
+			_ = c.Close()
+			return
+		}
 		log.Printf("websocket client connected: user=%s, token=%s", user.Username, maskToken(token))
 		defer h.removeClient(client)
 
@@ -234,7 +252,12 @@ func (h *SocketHub) RegisterSingleInstrumentRoutes(app *fiber.App, path string) 
 		}
 
 		client := newSocketClient(c, token, user.ID, makeSymbolSet([]string{filterSymbol}))
-		h.addClient(client)
+		if !h.addClient(client) {
+			log.Printf("filtered websocket rejected: hub at capacity (max=%d)", socketMaxClients)
+			_ = c.WriteJSON(fiber.Map{"status_code": fiber.StatusServiceUnavailable, "error": "server at capacity, try again later"})
+			_ = c.Close()
+			return
+		}
 		log.Printf("filtered websocket connected: user=%s symbol=%s", user.Username, filterSymbol)
 		defer h.removeClient(client)
 
@@ -305,7 +328,12 @@ func (h *SocketHub) RegisterBulkInstrumentRoutes(app *fiber.App, path string) {
 		}
 
 		client := newSocketClient(c, token, user.ID, makeSymbolSet(filterSymbols))
-		h.addClient(client)
+		if !h.addClient(client) {
+			log.Printf("bulk filtered websocket rejected: hub at capacity (max=%d)", socketMaxClients)
+			_ = c.WriteJSON(fiber.Map{"status_code": fiber.StatusServiceUnavailable, "error": "server at capacity, try again later"})
+			_ = c.Close()
+			return
+		}
 		log.Printf("bulk filtered websocket connected: user=%s symbols=%d", user.Username, len(filterSymbols))
 		defer h.removeClient(client)
 
@@ -335,34 +363,56 @@ func (h *SocketHub) RegisterBulkInstrumentRoutes(app *fiber.App, path string) {
 	}))
 }
 
-func (h *SocketHub) BroadcastJSON(payload any) {
-	data, err := json.Marshal(payload)
-	if err != nil {
+// BroadcastRaw sends an already-marshalled payload to every connected
+// client. Symbol is used for filter matching and MUST be uppercase.
+// All client sends are non-blocking (slow clients drop messages) so
+// this method runs in bounded time regardless of client count.
+func (h *SocketHub) BroadcastRaw(symbol string, data []byte) {
+	if len(data) == 0 {
 		return
 	}
-
-	broadcastSymbol := extractSymbolFromPayload(payload)
+	broadcastSymbol := strings.ToUpper(strings.TrimSpace(symbol))
 
 	h.mu.RLock()
-	clients := make([]*socketClient, 0, len(h.clients))
+	// Avoid allocating a fresh slice each broadcast by doing the send
+	// under a read-lock. Sends are non-blocking, so holding RLock for
+	// the duration of the fan-out is O(numClients) with no contention
+	// risk (writers to the map are only Register/Close paths).
 	for client := range h.clients {
-		clients = append(clients, client)
-	}
-	h.mu.RUnlock()
-
-	for _, client := range clients {
 		if len(client.filterSyms) > 0 {
 			if broadcastSymbol == "" || !client.matchesSymbol(broadcastSymbol) {
 				continue
 			}
 		}
-
 		select {
 		case client.sendCh <- data:
 		default:
 			// slow client — drop message instead of blocking the broadcast loop
 		}
 	}
+	h.mu.RUnlock()
+}
+
+// BroadcastJSON is retained for compatibility with non-tick callers
+// (e.g. admin notifications). It marshals once and delegates to
+// BroadcastRaw. Do NOT use this on the hot tick path.
+func (h *SocketHub) BroadcastJSON(payload any) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+
+	symbol := ""
+	switch v := payload.(type) {
+	case map[string]any:
+		if s, ok := v["symbol"].(string); ok {
+			symbol = s
+		}
+	case map[string]string:
+		symbol = v["symbol"]
+	}
+
+	h.BroadcastRaw(symbol, data)
 }
 
 func (h *SocketHub) CloseAll() {
@@ -379,11 +429,19 @@ func (h *SocketHub) CloseAll() {
 	}
 }
 
-func (h *SocketHub) addClient(client *socketClient) {
+// addClient registers a new WebSocket client. Returns false if the hub
+// is at capacity — callers MUST close the underlying connection in
+// that case to avoid leaking FDs.
+func (h *SocketHub) addClient(client *socketClient) bool {
 	h.mu.Lock()
+	if len(h.clients) >= socketMaxClients {
+		h.mu.Unlock()
+		return false
+	}
 	h.clients[client] = struct{}{}
 	h.mu.Unlock()
 	go client.writePump()
+	return true
 }
 
 func (h *SocketHub) removeClient(client *socketClient) {
@@ -444,7 +502,11 @@ func (h *SocketHub) resolveUserFromSocketToken(token string) (*models.User, erro
 		return user, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Short timeout: if the DB pool is saturated we'd rather reject
+	// the handshake than keep a goroutine waiting indefinitely for a
+	// connection. The handshake timeout also bounds this upstream in
+	// Fiber/fasthttp, but we enforce it explicitly here.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	return models.GetUserByToken(h.db.WithContext(ctx), token)
 }
@@ -466,7 +528,7 @@ func (h *SocketHub) resolveUserFromJWT(token string) (*models.User, error) {
 		return nil, errors.New("invalid jwt token")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	return models.GetUserByID(h.db.WithContext(ctx), claims.UserID)
 }
@@ -663,38 +725,4 @@ func (c *socketClient) matchesSymbol(symbol string) bool {
 	normalized := strings.ToUpper(strings.TrimSpace(symbol))
 	_, ok := c.filterSyms[normalized]
 	return ok
-}
-
-func extractSymbolFromPayload(payload any) string {
-	switch value := payload.(type) {
-	case map[string]any:
-		if symbol, ok := value["symbol"].(string); ok {
-			return strings.TrimSpace(symbol)
-		}
-	case map[string]string:
-		return strings.TrimSpace(value["symbol"])
-	}
-
-	v := reflect.ValueOf(payload)
-	if !v.IsValid() {
-		return ""
-	}
-
-	if v.Kind() == reflect.Pointer {
-		if v.IsNil() {
-			return ""
-		}
-		v = v.Elem()
-	}
-
-	if v.Kind() != reflect.Struct {
-		return ""
-	}
-
-	field := v.FieldByName("Symbol")
-	if !field.IsValid() || field.Kind() != reflect.String {
-		return ""
-	}
-
-	return strings.TrimSpace(field.String())
 }

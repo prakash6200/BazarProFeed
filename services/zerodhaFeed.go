@@ -594,7 +594,11 @@ func (s *ZerodhaFeedService) loadAccessTokenFromDatabase() {
 		return
 	}
 
-	session, err := models.GetActiveZerodhaSession(s.db)
+	// Bounded at boot AND at reconnect time. Without this, a slow
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	session, err := models.GetActiveZerodhaSession(s.db.WithContext(ctx))
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			log.Printf("failed to load zerodha access token from database: %v", err)
@@ -693,24 +697,40 @@ func (s *ZerodhaFeedService) persistAccessToken(accessToken, adminID string) (*m
 		return nil, errors.New("database not configured")
 	}
 
-	session, err := models.SaveActiveZerodhaSession(s.db, accessToken, adminID)
+	// This runs on the admin request path via UpdateSession. A
+	// saturated pool here would pin the admin's fasthttp worker
+	// indefinitely, so we cap both writes.
+	saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	session, err := models.SaveActiveZerodhaSession(s.db.WithContext(saveCtx), accessToken, adminID)
+	saveCancel()
 	if err != nil {
 		return nil, err
 	}
 
 	s.setAccessToken(accessToken)
-	if err := models.UpdateActiveZerodhaSessionLastError(s.db, ""); err != nil {
+
+	clearCtx, clearCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer clearCancel()
+	if err := models.UpdateActiveZerodhaSessionLastError(s.db.WithContext(clearCtx), ""); err != nil {
 		log.Printf("failed to clear zerodha session last_error: %v", err)
 	}
 
 	return session, nil
 }
 
+// persistLastError writes the most recent session error to the DB.
+// This is called from the feed goroutine (reconnect/auth-retry loop)
+// so it MUST NOT block indefinitely — a saturated pool here would
+// keep the feed loop stuck and never reconnect. A 2s deadline is
+// generous for a single UPDATE; if it trips we just drop the log
+// and retry on the next error.
 func (s *ZerodhaFeedService) persistLastError(lastError string) error {
 	if s.db == nil {
 		return nil
 	}
-	return models.UpdateActiveZerodhaSessionLastError(s.db, lastError)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return models.UpdateActiveZerodhaSessionLastError(s.db.WithContext(ctx), lastError)
 }
 
 func (s *ZerodhaFeedService) restartWithLatestToken() {
@@ -1177,10 +1197,10 @@ func (s *ZerodhaFeedService) parseAndPublishTicks(payload []byte) {
 		if s.tickHub != nil {
 			s.tickHub.Publish(updated)
 		}
-		if s.redisCache != nil && s.baseCtx != nil && s.baseCtx.Err() == nil {
-			cacheCtx, cacheCancel := context.WithTimeout(s.baseCtx, 2*time.Second)
-			s.redisCache.Set(cacheCtx, ZerodhaTickPrefix, updated)
-			cacheCancel()
+		// Fire-and-forget Redis cache write — never blocks the reader
+		// goroutine even if Redis is slow or unreachable.
+		if s.redisCache != nil {
+			s.redisCache.SetAsyncWithPrefix(ZerodhaTickPrefix, updated)
 		}
 	}
 }
@@ -1338,7 +1358,12 @@ func (s *ZerodhaFeedService) seedRegistryFromDatabase() {
 		return
 	}
 
-	instruments, err := models.GetActiveInstrumentsForFeed(s.db)
+	// Boot-time load. Bounded so a slow DB cannot keep the service
+	// constructor (and therefore main) from reaching app.Listen.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	instruments, err := models.GetActiveInstrumentsForFeed(s.db.WithContext(ctx))
 	if err != nil {
 		log.Printf("zerodha registry seed failed: %v", err)
 		return
@@ -1383,7 +1408,13 @@ func (s *ZerodhaFeedService) RefreshFromDatabase(ctx context.Context) error {
 		return nil
 	}
 
-	instruments, err := models.GetActiveInstrumentsForFeed(s.db)
+	// Propagate the caller's ctx so the daily expiry loop can cancel
+	// a wedged refresh instead of parking a goroutine on a saturated
+	// pool forever.
+	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	instruments, err := models.GetActiveInstrumentsForFeed(s.db.WithContext(queryCtx))
 	if err != nil {
 		return fmt.Errorf("load active zerodha instruments failed: %w", err)
 	}

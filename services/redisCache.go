@@ -6,6 +6,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -18,16 +19,137 @@ const (
 	ZerodhaCircuitPrefix = "feed:zerodha:circuit:"
 	GlobalTickPrefix     = "feed:global:tick:"
 	GlobalSymbolListKey  = "feed:global:symbols"
+
+	// Async cache writer — size of the per-cache write channel. The hot
+	// tick goroutine pushes marshalled payloads here without blocking;
+	// the writer goroutine drains them to Redis. On overflow newer ticks
+	// replace older pending writes for the same symbol (latest-wins),
+	// which is exactly what a per-symbol cache needs.
+	cacheWriteQueueSize = 8192
+
+	// Upper bound on time a single Redis SET is allowed to take before
+	// the writer gives up and drops it. Kept tight so a Redis stall
+	// cannot back-pressure the tick pipeline.
+	cacheWriteTimeout = 1500 * time.Millisecond
 )
+
+type cacheWriteJob struct {
+	key     string
+	payload []byte
+}
 
 // RedisTickCache caches NormalizedTick values in Redis per symbol.
 // All methods are safe to call with a nil client (no-ops).
+//
+// Writes on the hot tick path go through a bounded, non-blocking
+// channel drained by a background writer goroutine — the caller never
+// waits on Redis.
 type RedisTickCache struct {
 	client *redis.Client
+
+	writerOnce sync.Once
+	writeCh    chan cacheWriteJob
+	// pending is a latest-wins map: multiple updates to the same symbol
+	// while the writer is slow collapse into a single write.
+	pendingMu sync.Mutex
+	pending   map[string][]byte
 }
 
 func NewRedisTickCache(client *redis.Client) *RedisTickCache {
-	return &RedisTickCache{client: client}
+	c := &RedisTickCache{
+		client:  client,
+		writeCh: make(chan cacheWriteJob, cacheWriteQueueSize),
+		pending: make(map[string][]byte),
+	}
+	return c
+}
+
+// StartWriter launches the background goroutine that drains pending
+// writes to Redis. Safe to call multiple times; only the first call
+// starts the goroutine. It is a no-op when the Redis client is nil.
+func (c *RedisTickCache) StartWriter(ctx context.Context) {
+	if c == nil || c.client == nil {
+		return
+	}
+	c.writerOnce.Do(func() {
+		go c.runWriter(ctx)
+	})
+}
+
+func (c *RedisTickCache) runWriter(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job, ok := <-c.writeCh:
+			if !ok {
+				return
+			}
+
+			// Collapse any newer pending write for this key.
+			c.pendingMu.Lock()
+			if latest, found := c.pending[job.key]; found {
+				job.payload = latest
+				delete(c.pending, job.key)
+			}
+			c.pendingMu.Unlock()
+
+			writeCtx, cancel := context.WithTimeout(context.Background(), cacheWriteTimeout)
+			if err := c.client.Set(writeCtx, job.key, job.payload, tickCacheTTL).Err(); err != nil {
+				// Demote to debug-level noise — Redis outages are common.
+				log.Printf("redis async cache set error: key=%s err=%v", job.key, err)
+			}
+			cancel()
+		}
+	}
+}
+
+// enqueue schedules an async write. Never blocks the caller.
+func (c *RedisTickCache) enqueue(key string, payload []byte) {
+	if c == nil || c.client == nil || key == "" || len(payload) == 0 {
+		return
+	}
+
+	c.pendingMu.Lock()
+	c.pending[key] = payload
+	c.pendingMu.Unlock()
+
+	select {
+	case c.writeCh <- cacheWriteJob{key: key, payload: payload}:
+	default:
+		// Writer can't keep up. The pending map still holds the
+		// freshest payload for this key; drop this wake-up and the
+		// next Enqueue for any key will pick up the latest value.
+	}
+}
+
+// SetAsync enqueues a tick cache update without blocking the caller.
+// Safe to call from the hot feed goroutine. Returns immediately.
+func (c *RedisTickCache) SetAsync(tick NormalizedTick) {
+	if c == nil || c.client == nil || tick.Symbol == "" {
+		return
+	}
+	data, err := json.Marshal(tick)
+	if err != nil {
+		return
+	}
+	// Default prefix picker: callers in this codebase set a dedicated
+	// cache instance per prefix (zerodhaCache / globalCache) but share
+	// the same Redis client, so the prefix is passed explicitly via
+	// SetAsyncWithPrefix. Retained for API compatibility.
+	c.enqueue(strings.ToUpper(tick.Symbol), data)
+}
+
+// SetAsyncWithPrefix is the preferred non-blocking hot-path API.
+func (c *RedisTickCache) SetAsyncWithPrefix(prefix string, tick NormalizedTick) {
+	if c == nil || c.client == nil || tick.Symbol == "" {
+		return
+	}
+	data, err := json.Marshal(tick)
+	if err != nil {
+		return
+	}
+	c.enqueue(prefix+strings.ToUpper(tick.Symbol), data)
 }
 
 func (c *RedisTickCache) Client() *redis.Client {
