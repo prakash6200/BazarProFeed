@@ -98,11 +98,13 @@ func (cb *CandleBuilder) WarmupFromDB(db *gorm.DB) {
 	if db == nil || cb.redisClient == nil {
 		return
 	}
+	log.Printf("candle builder [%s]: warmup started for last 24h candles", cb.source)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	total := 0
+	hadErrors := false
 	const warmupPage = 1000
 	for _, intervalMin := range candleIntervals {
 		var written int
@@ -116,81 +118,133 @@ func (cb *CandleBuilder) WarmupFromDB(db *gorm.DB) {
 		}
 
 		if fetchErr != nil {
+			hadErrors = true
 			log.Printf("candle builder [%s]: warmup error interval=%dm: %v", cb.source, intervalMin, fetchErr)
 			continue
+		}
+		if written > 0 {
+			log.Printf("candle builder [%s]: warmup interval=%dm cached %d buckets", cb.source, intervalMin, written)
 		}
 		total += written
 	}
 
 	if total > 0 {
 		log.Printf("candle builder [%s]: warmup complete — %d candle buckets loaded into Redis + memory", cb.source, total)
+	} else if hadErrors {
+		log.Printf("candle builder [%s]: warmup completed with errors — 0 buckets cached", cb.source)
 	} else {
 		log.Printf("candle builder [%s]: warmup complete — no historical data found (empty tables or first run)", cb.source)
 	}
 }
 
 func (cb *CandleBuilder) warmupZerodha(ctx context.Context, db *gorm.DB, intervalMin, pageSize int) (int, error) {
+	symbols, err := listWarmupSymbols(ctx, db, "zerodha_tick_events")
+	if err != nil {
+		return 0, err
+	}
+	if len(symbols) == 0 {
+		return 0, nil
+	}
+
 	written := 0
-	for page := 1; ; page++ {
-		rows, _, err := models.ListZerodhaCandlesLast24h(db, intervalMin, page, pageSize, models.ZerodhaTickQueryFilters{})
-		if err != nil {
-			return written, err
-		}
-		if len(rows) == 0 {
-			break
-		}
-		bars := make([]warmupBar, len(rows))
-		for i, r := range rows {
-			bars[i] = warmupBar{
-				exchange:      r.Exchange,
-				symbol:        r.Symbol,
-				intervalStart: r.IntervalStart,
-				open:          r.Open,
-				high:          r.High,
-				low:           r.Low,
-				close_:        r.Close,
-				count:         r.TickCount,
+	for _, symbol := range symbols {
+		for page := 1; ; page++ {
+			rows, _, err := models.ListZerodhaCandlesLast24h(
+				db.WithContext(ctx), intervalMin, page, pageSize,
+				models.ZerodhaTickQueryFilters{Symbol: symbol},
+			)
+			if err != nil {
+				return written, err
 			}
-		}
-		cb.writeWarmupBars(intervalMin, bars)
-		written += len(rows)
-		if len(rows) < pageSize {
-			break // last page
+			if len(rows) == 0 {
+				break
+			}
+			bars := make([]warmupBar, len(rows))
+			for i, r := range rows {
+				bars[i] = warmupBar{
+					exchange:      r.Exchange,
+					symbol:        r.Symbol,
+					intervalStart: r.IntervalStart,
+					open:          r.Open,
+					high:          r.High,
+					low:           r.Low,
+					close_:        r.Close,
+					count:         r.TickCount,
+				}
+			}
+			cb.writeWarmupBars(intervalMin, bars)
+			written += len(rows)
+			if len(rows) < pageSize {
+				break // last page for symbol
+			}
 		}
 	}
 	return written, nil
 }
 
 func (cb *CandleBuilder) warmupGlobal(ctx context.Context, db *gorm.DB, intervalMin, pageSize int) (int, error) {
+	symbols, err := listWarmupSymbols(ctx, db, "global_tick_events")
+	if err != nil {
+		return 0, err
+	}
+	if len(symbols) == 0 {
+		return 0, nil
+	}
+
 	written := 0
-	for page := 1; ; page++ {
-		rows, _, err := models.ListGlobalCandlesLast24h(db, intervalMin, page, pageSize, models.GlobalTickQueryFilters{})
-		if err != nil {
-			return written, err
-		}
-		if len(rows) == 0 {
-			break
-		}
-		bars := make([]warmupBar, len(rows))
-		for i, r := range rows {
-			bars[i] = warmupBar{
-				exchange:      r.Exchange,
-				symbol:        r.Symbol,
-				intervalStart: r.IntervalStart,
-				open:          r.Open,
-				high:          r.High,
-				low:           r.Low,
-				close_:        r.Close,
-				count:         r.TickCount,
+	for _, symbol := range symbols {
+		for page := 1; ; page++ {
+			rows, _, err := models.ListGlobalCandlesLast24h(
+				db.WithContext(ctx), intervalMin, page, pageSize,
+				models.GlobalTickQueryFilters{Symbol: symbol},
+			)
+			if err != nil {
+				return written, err
 			}
-		}
-		cb.writeWarmupBars(intervalMin, bars)
-		written += len(rows)
-		if len(rows) < pageSize {
-			break // last page
+			if len(rows) == 0 {
+				break
+			}
+			bars := make([]warmupBar, len(rows))
+			for i, r := range rows {
+				bars[i] = warmupBar{
+					exchange:      r.Exchange,
+					symbol:        r.Symbol,
+					intervalStart: r.IntervalStart,
+					open:          r.Open,
+					high:          r.High,
+					low:           r.Low,
+					close_:        r.Close,
+					count:         r.TickCount,
+				}
+			}
+			cb.writeWarmupBars(intervalMin, bars)
+			written += len(rows)
+			if len(rows) < pageSize {
+				break // last page for symbol
+			}
 		}
 	}
 	return written, nil
+}
+
+func listWarmupSymbols(ctx context.Context, db *gorm.DB, table string) ([]string, error) {
+	if db == nil {
+		return nil, nil
+	}
+
+	query := fmt.Sprintf(`
+SELECT DISTINCT symbol
+FROM %s
+WHERE created_at >= NOW() - INTERVAL '24 hours'
+AND symbol IS NOT NULL
+AND symbol <> ''
+ORDER BY symbol`, table)
+
+	var symbols []string
+	if err := db.WithContext(ctx).Raw(query).Scan(&symbols).Error; err != nil {
+		return nil, err
+	}
+	return symbols, nil
 }
 
 type warmupBar struct {
@@ -264,6 +318,7 @@ func (cb *CandleBuilder) writeWarmupBars(intervalMin int, bars []warmupBar) {
 
 	if _, err := pipe.Exec(writeCtx); err != nil && writeCtx.Err() == nil {
 		log.Printf("candle builder [%s]: warmup redis pipeline error: %v", cb.source, err)
+		return
 	}
 }
 
