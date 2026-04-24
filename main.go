@@ -78,17 +78,6 @@ func main() {
 		}
 	})
 
-	runStartupStep("PurgeOldFeedData", func(ctx context.Context) {
-		deleted, err := services.RunFeedRetentionOnce(ctx, config.DB, 7*24*time.Hour, 5000)
-		if err != nil {
-			log.Printf("feed retention startup cleanup failed: %v", err)
-			return
-		}
-		if deleted > 0 {
-			log.Printf("feed retention startup cleanup deleted %d rows older than 7 days", deleted)
-		}
-	})
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -119,6 +108,9 @@ func main() {
 	// Running warmup sequentially avoids hammering DB+Redis with two large jobs
 	// at the same time while feed/socket connections are still stabilizing.
 	go startDeferredCandleWarmup(ctx, config.DB, 60*time.Second, zerodhaCandleBuilder, globalCandleBuilder)
+	// Run one-time feed retention after boot (not in strict startup step), so a
+	// large backlog never crashes startup with a 30s deadline exceed.
+	go runDeferredFeedRetentionOnce(ctx, config.DB, 90*time.Second, 7*24*time.Hour, 5000)
 
 	globSocketHub := config.NewSocketHub(config.DB)
 
@@ -410,6 +402,38 @@ func startDeferredCandleWarmup(ctx context.Context, db *gorm.DB, delay time.Dura
 			return
 		}
 		b.WarmupFromDB(db)
+	}
+}
+
+// runDeferredFeedRetentionOnce executes a single retention cleanup after a
+// post-boot delay, with its own timeout and non-fatal logging.
+func runDeferredFeedRetentionOnce(ctx context.Context, db *gorm.DB, delay, olderThan time.Duration, batchSize int) {
+	if db == nil {
+		return
+	}
+
+	if delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+	}
+
+	runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	deleted, err := services.RunFeedRetentionOnce(runCtx, db, olderThan, batchSize)
+	if err != nil {
+		log.Printf("feed retention deferred cleanup failed: %v", err)
+		return
+	}
+	if deleted > 0 {
+		log.Printf("feed retention deferred cleanup deleted %d rows older than %s", deleted, olderThan)
+	} else {
+		log.Printf("feed retention deferred cleanup found no rows older than %s", olderThan)
 	}
 }
 
