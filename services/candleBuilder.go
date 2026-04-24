@@ -89,18 +89,11 @@ func NewCandleBuilder(source string, redisClient *redis.Client) *CandleBuilder {
 	}
 }
 
-// WarmupFromDB fetches the last 24h of pre-computed candle bars from Postgres
-// for every configured interval and writes them into Redis using the same key
-// format that the live CandleBuilder uses.  Call this once at startup before
-// Start() so the API always has a populated Redis cache even on a cold boot.
-//
-// Only symbols that already exist in Redis as an active tick (via the tick
-// cache) are warmed up; everything else is hydrated lazily as ticks arrive.
-// If db or redisClient is nil the call is a no-op.
-// WarmupFromDB fetches 24h of candle bars from Postgres, writes them to Redis,
-// and seeds the in-memory state map so live ticks continue on top of historical
-// data without overwriting the open price.  Uses its own 2-minute timeout so it
-// is safe to call outside runStartupStep.
+// WarmupFromDB fetches the last 24h of candle bars from Postgres, writes them
+// to Redis, and seeds the in-memory state map so that the first live tick for a
+// still-open bucket continues from the historical open price rather than
+// overwriting it.  The function manages its own 2-minute timeout and is safe to
+// call in a background goroutine without blocking server startup.
 func (cb *CandleBuilder) WarmupFromDB(db *gorm.DB) {
 	if db == nil || cb.redisClient == nil {
 		return
@@ -159,7 +152,7 @@ func (cb *CandleBuilder) warmupZerodha(ctx context.Context, db *gorm.DB, interva
 				count:         r.TickCount,
 			}
 		}
-		cb.writeWarmupBars(ctx, intervalMin, bars)
+		cb.writeWarmupBars(intervalMin, bars)
 		written += len(rows)
 		if len(rows) < pageSize {
 			break // last page
@@ -191,7 +184,7 @@ func (cb *CandleBuilder) warmupGlobal(ctx context.Context, db *gorm.DB, interval
 				count:         r.TickCount,
 			}
 		}
-		cb.writeWarmupBars(ctx, intervalMin, bars)
+		cb.writeWarmupBars(intervalMin, bars)
 		written += len(rows)
 		if len(rows) < pageSize {
 			break // last page
@@ -211,7 +204,7 @@ type warmupBar struct {
 	count         int64
 }
 
-func (cb *CandleBuilder) writeWarmupBars(ctx context.Context, intervalMin int, bars []warmupBar) {
+func (cb *CandleBuilder) writeWarmupBars(intervalMin int, bars []warmupBar) {
 	if len(bars) == 0 {
 		return
 	}
@@ -375,21 +368,41 @@ func (cb *CandleBuilder) flushLoop(ctx context.Context) {
 	}
 }
 
-// flush writes all dirty states to Redis and cleans up expired buckets.
+// flush writes all dirty states to Redis and cleans up stale buckets.
+//
+// Eviction policy:
+//   - Buckets older than 25 h are always evicted (data already expired from Redis).
+//   - Closed, non-dirty buckets are evicted after one extra flush-interval (30 s)
+//     grace window.  This lets any marginally delayed ticks still land without
+//     re-opening a bucket that was already written to Redis.  Only the current
+//     open bucket (and the just-closed one within the grace window) stays in
+//     memory at steady state — O(symbols × intervals) rather than O(25 h of history).
 func (cb *CandleBuilder) flush(ctx context.Context) {
 	now := time.Now().UTC()
 	cutoff := now.Add(-25 * time.Hour).Unix()
+	// Grace end: evict non-dirty closed buckets whose end is older than this.
+	graceCutoff := now.Add(-candleFlushInterval).Unix()
 
 	cb.mu.Lock()
-	// Snapshot dirty states and drop stale buckets in one pass.
 	toFlush := make(map[bucketKey]*candleState)
 	for k, st := range cb.states {
+		bucketEndUnix := k.bucketUnix + int64(k.intervalMin)*60
+
+		// Hard eviction: older than 25 h (Redis TTL has expired too).
 		if k.bucketUnix < cutoff {
 			delete(cb.states, k)
 			continue
 		}
+
+		// Soft eviction: bucket has closed and been quiet for one grace period.
+		// Frees memory for all historical (non-current) buckets while keeping
+		// the active bucket and the just-closed-one available for delayed ticks.
+		if !st.dirty && bucketEndUnix < graceCutoff {
+			delete(cb.states, k)
+			continue
+		}
+
 		if st.dirty {
-			// Clone to avoid holding the lock during Redis IO.
 			clone := *st
 			toFlush[k] = &clone
 			st.dirty = false
