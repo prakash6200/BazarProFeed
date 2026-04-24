@@ -34,6 +34,9 @@ const (
 	candleTTL       = 25 * time.Hour
 	// How often the in-memory state is flushed to Redis.
 	candleFlushInterval = 30 * time.Second
+	// Warmup uses heavy historical aggregation queries; keep a higher
+	// statement timeout than the online API path to avoid false cancellations.
+	warmupStatementTimeoutMs = 180000
 )
 
 // CandleBar is the OHLC snapshot stored in Redis.
@@ -100,7 +103,7 @@ func (cb *CandleBuilder) WarmupFromDB(db *gorm.DB) {
 	}
 	log.Printf("candle builder [%s]: warmup started for last 24h candles", cb.source)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
 	total := 0
@@ -149,10 +152,21 @@ func (cb *CandleBuilder) warmupZerodha(ctx context.Context, db *gorm.DB, interva
 	written := 0
 	for _, symbol := range symbols {
 		for page := 1; ; page++ {
-			rows, _, err := models.ListZerodhaCandlesLast24h(
-				db.WithContext(ctx), intervalMin, page, pageSize,
-				models.ZerodhaTickQueryFilters{Symbol: symbol},
-			)
+			var rows []models.ZerodhaCandleRow
+			err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := tx.Exec("SET LOCAL statement_timeout = ?", warmupStatementTimeoutMs).Error; err != nil {
+					return err
+				}
+				fetched, _, qErr := models.ListZerodhaCandlesLast24h(
+					tx.WithContext(ctx), intervalMin, page, pageSize,
+					models.ZerodhaTickQueryFilters{Symbol: symbol},
+				)
+				if qErr != nil {
+					return qErr
+				}
+				rows = fetched
+				return nil
+			})
 			if err != nil {
 				return written, err
 			}
@@ -194,10 +208,21 @@ func (cb *CandleBuilder) warmupGlobal(ctx context.Context, db *gorm.DB, interval
 	written := 0
 	for _, symbol := range symbols {
 		for page := 1; ; page++ {
-			rows, _, err := models.ListGlobalCandlesLast24h(
-				db.WithContext(ctx), intervalMin, page, pageSize,
-				models.GlobalTickQueryFilters{Symbol: symbol},
-			)
+			var rows []models.GlobalCandleRow
+			err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := tx.Exec("SET LOCAL statement_timeout = ?", warmupStatementTimeoutMs).Error; err != nil {
+					return err
+				}
+				fetched, _, qErr := models.ListGlobalCandlesLast24h(
+					tx.WithContext(ctx), intervalMin, page, pageSize,
+					models.GlobalTickQueryFilters{Symbol: symbol},
+				)
+				if qErr != nil {
+					return qErr
+				}
+				rows = fetched
+				return nil
+			})
 			if err != nil {
 				return written, err
 			}
