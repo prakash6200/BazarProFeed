@@ -6,12 +6,14 @@ import (
 	"feedprovider/config"
 	"feedprovider/middleware"
 	"feedprovider/models"
+	"feedprovider/services"
 	"feedprovider/validator"
 	"log"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -53,8 +55,9 @@ func isDBBusyErr(err error) bool {
 }
 
 type UserController struct {
-	db        *gorm.DB
-	socketHub *config.SocketHub
+	db          *gorm.DB
+	socketHub   *config.SocketHub
+	redisClient *redis.Client
 }
 
 type GlobalCandlesRequest struct {
@@ -91,10 +94,11 @@ type ZerodhaRawTicksRequest struct {
 	SizePerPage   int    `json:"sizePerPage"`
 }
 
-func NewUserController(db *gorm.DB, socketHub *config.SocketHub) *UserController {
+func NewUserController(db *gorm.DB, socketHub *config.SocketHub, redisClient *redis.Client) *UserController {
 	return &UserController{
-		db:        db,
-		socketHub: socketHub,
+		db:          db,
+		socketHub:   socketHub,
+		redisClient: redisClient,
 	}
 }
 
@@ -583,6 +587,47 @@ func (uc *UserController) GetGlobalCandles(c *fiber.Ctx) error {
 		})
 	}
 
+	// Try Redis first — CandleBuilder continuously pre-builds these in the background.
+	// Postgres is only hit on a cold start / Redis miss.
+	now := time.Now().UTC()
+	windowStart := now.Add(-24 * time.Hour)
+	if bars, err := services.GetCandlesFromRedis(
+		c.UserContext(), uc.redisClient, "global",
+		req.Symbol, intervalMinutes, windowStart, now,
+	); err == nil && len(bars) > 0 {
+		// Apply pagination over the Redis result set (newest first).
+		total := int64(len(bars))
+		// bars from GetCandlesFromRedis are oldest-first; reverse for newest-first.
+		for i, j := 0, len(bars)-1; i < j; i, j = i+1, j-1 {
+			bars[i], bars[j] = bars[j], bars[i]
+		}
+		offset := (req.Page - 1) * req.SizePerPage
+		if offset > len(bars) {
+			offset = len(bars)
+		}
+		end := offset + req.SizePerPage
+		if end > len(bars) {
+			end = len(bars)
+		}
+		page := bars[offset:end]
+		totalPages := int((total + int64(req.SizePerPage) - 1) / int64(req.SizePerPage))
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"status_code": fiber.StatusOK,
+			"message":     "global candles fetched successfully",
+			"candles":     page,
+			"source":      "cache",
+			"pagination": fiber.Map{
+				"page":         req.Page,
+				"sizePerPage":  req.SizePerPage,
+				"totalRecords": total,
+				"totalPages":   totalPages,
+				"interval":     interval,
+				"duration":     "24h",
+			},
+		})
+	}
+
+	// Redis miss — fall back to Postgres.
 	db, cancel := scopedDB(c, uc.db, analyticsTimeout)
 	rows, total, err := models.ListGlobalCandlesLast24h(db, intervalMinutes, req.Page, req.SizePerPage, models.GlobalTickQueryFilters{
 		Symbol: req.Symbol,
@@ -613,6 +658,7 @@ func (uc *UserController) GetGlobalCandles(c *fiber.Ctx) error {
 		"status_code": fiber.StatusOK,
 		"message":     "global candles fetched successfully",
 		"candles":     rows,
+		"source":      "db",
 		"pagination": fiber.Map{
 			"page":         req.Page,
 			"sizePerPage":  req.SizePerPage,
@@ -781,6 +827,46 @@ func (uc *UserController) GetZerodhaCandles(c *fiber.Ctx) error {
 		})
 	}
 
+	// Try Redis first — CandleBuilder continuously pre-builds these in the background.
+	// Postgres is only hit on a cold start / Redis miss.
+	now := time.Now().UTC()
+	windowStart := now.Add(-24 * time.Hour)
+	if bars, err := services.GetCandlesFromRedis(
+		c.UserContext(), uc.redisClient, "zerodha",
+		req.Symbol, intervalMinutes, windowStart, now,
+	); err == nil && len(bars) > 0 {
+		total := int64(len(bars))
+		// bars from GetCandlesFromRedis are oldest-first; reverse for newest-first.
+		for i, j := 0, len(bars)-1; i < j; i, j = i+1, j-1 {
+			bars[i], bars[j] = bars[j], bars[i]
+		}
+		offset := (req.Page - 1) * req.SizePerPage
+		if offset > len(bars) {
+			offset = len(bars)
+		}
+		end := offset + req.SizePerPage
+		if end > len(bars) {
+			end = len(bars)
+		}
+		page := bars[offset:end]
+		totalPages := int((total + int64(req.SizePerPage) - 1) / int64(req.SizePerPage))
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"status_code": fiber.StatusOK,
+			"message":     "zerodha candles fetched successfully",
+			"candles":     page,
+			"source":      "cache",
+			"pagination": fiber.Map{
+				"page":         req.Page,
+				"sizePerPage":  req.SizePerPage,
+				"totalRecords": total,
+				"totalPages":   totalPages,
+				"interval":     interval,
+				"duration":     "24h",
+			},
+		})
+	}
+
+	// Redis miss — fall back to Postgres.
 	db, cancel := scopedDB(c, uc.db, analyticsTimeout)
 	rows, total, err := models.ListZerodhaCandlesLast24h(db, intervalMinutes, req.Page, req.SizePerPage, models.ZerodhaTickQueryFilters{
 		Symbol: req.Symbol,
@@ -811,6 +897,7 @@ func (uc *UserController) GetZerodhaCandles(c *fiber.Ctx) error {
 		"status_code": fiber.StatusOK,
 		"message":     "zerodha candles fetched successfully",
 		"candles":     rows,
+		"source":      "db",
 		"pagination": fiber.Map{
 			"page":         req.Page,
 			"sizePerPage":  req.SizePerPage,

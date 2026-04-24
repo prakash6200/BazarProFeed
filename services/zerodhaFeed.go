@@ -595,6 +595,7 @@ func (s *ZerodhaFeedService) loadAccessTokenFromDatabase() {
 	}
 
 	// Bounded at boot AND at reconnect time. Without this, a slow
+	// DB pool keeps Start() blocked and app.Listen never runs.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

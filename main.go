@@ -78,6 +78,17 @@ func main() {
 		}
 	})
 
+	runStartupStep("PurgeOldFeedData", func(ctx context.Context) {
+		deleted, err := services.RunFeedRetentionOnce(ctx, config.DB, 7*24*time.Hour, 5000)
+		if err != nil {
+			log.Printf("feed retention startup cleanup failed: %v", err)
+			return
+		}
+		if deleted > 0 {
+			log.Printf("feed retention startup cleanup deleted %d rows older than 7 days", deleted)
+		}
+	})
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -93,6 +104,24 @@ func main() {
 	globMarketTickHub := services.NewTickHub()
 	globMarketFeedService := services.NewGlobalMarketFeedService(config.DB, globalCache)
 	globMarketFeedService.Start(ctx, globMarketTickHub)
+
+	// Background candle builders — consume live ticks and pre-compute OHLC
+	// bars for all intervals (1m/3m/5m/15m/30m) in-memory, flushing to Redis
+	// every 30s.  The candle API reads from Redis instead of running the
+	// heavy Postgres GROUP BY query on every request.
+	zerodhaCandleBuilder := services.NewCandleBuilder("zerodha", config.RedisClient)
+	globalCandleBuilder := services.NewCandleBuilder("global", config.RedisClient)
+
+	// Warmup candle caches from DB so the API has historical data immediately
+	// after restart, without waiting for live ticks to fill the buckets.
+	// Run in background goroutines so a slow DB never blocks server startup or
+	// triggers the 30 s runStartupStep hard timeout.
+	go zerodhaCandleBuilder.WarmupFromDB(config.DB)
+	go globalCandleBuilder.WarmupFromDB(config.DB)
+
+	zerodhaCandleBuilder.Start(ctx, tickHub)
+	globalCandleBuilder.Start(ctx, globMarketTickHub)
+
 	globSocketHub := config.NewSocketHub(config.DB)
 
 	socketHub := config.NewSocketHub(config.DB)
@@ -176,10 +205,10 @@ func main() {
 		}
 
 		body := fiber.Map{
-			"service":  "feedprovider",
-			"db":       fiber.Map{"ok": dbOK, "error": dbErr},
-			"redis":    fiber.Map{"ok": redisOK, "error": redisErr},
-			"market":   fiber.Map{"indian_open": services.IsIndianMarketOpen(), "global_open": services.IsGlobalMarketOpen()},
+			"service":    "feedprovider",
+			"db":         fiber.Map{"ok": dbOK, "error": dbErr},
+			"redis":      fiber.Map{"ok": redisOK, "error": redisErr},
+			"market":     fiber.Map{"indian_open": services.IsIndianMarketOpen(), "global_open": services.IsGlobalMarketOpen()},
 			"checked_at": time.Now().UTC(),
 		}
 		if !dbOK || !redisOK {
@@ -269,7 +298,7 @@ func main() {
 	instrumentController := controller.NewAdminInstrumentController(config.DB, zerodhaFeedService)
 	globalInstrumentController := controller.NewAdminGlobalInstrumentController(config.DB, globMarketFeedService)
 	zerodhaController := controller.NewAdminZerodhaController(config.DB, zerodhaFeedService)
-	userController := controller.NewUserController(config.DB, socketHub)
+	userController := controller.NewUserController(config.DB, socketHub, config.RedisClient)
 
 	router.RegisterAdminRoutes(app, adminController, config.DB)
 	router.RegisterAdminInstrumentRoutes(app, instrumentController, config.DB)
@@ -348,6 +377,7 @@ func main() {
 
 	// Daily cleanup: mark expired instruments and purge Redis keys after market close.
 	go dailyExpiryCleanupLoop(ctx, config.DB, zerodhaCache, globalCache, zerodhaFeedService, globMarketFeedService)
+	go services.StartFeedRetentionCron(ctx, config.DB, 7*24*time.Hour, 5000)
 
 	if err := app.Listen(config.App.Server.Host + ":" + config.App.Server.Port); err != nil {
 		if ctx.Err() == nil {
