@@ -112,15 +112,13 @@ func main() {
 	zerodhaCandleBuilder := services.NewCandleBuilder("zerodha", config.RedisClient)
 	globalCandleBuilder := services.NewCandleBuilder("global", config.RedisClient)
 
-	// Warmup candle caches from DB so the API has historical data immediately
-	// after restart, without waiting for live ticks to fill the buckets.
-	// Run in background goroutines so a slow DB never blocks server startup or
-	// triggers the 30 s runStartupStep hard timeout.
-	go zerodhaCandleBuilder.WarmupFromDB(config.DB)
-	go globalCandleBuilder.WarmupFromDB(config.DB)
-
 	zerodhaCandleBuilder.Start(ctx, tickHub)
 	globalCandleBuilder.Start(ctx, globMarketTickHub)
+
+	// Defer 24h candle warmup until after boot so restart latency stays low.
+	// Running warmup sequentially avoids hammering DB+Redis with two large jobs
+	// at the same time while feed/socket connections are still stabilizing.
+	go startDeferredCandleWarmup(ctx, config.DB, 60*time.Second, zerodhaCandleBuilder, globalCandleBuilder)
 
 	globSocketHub := config.NewSocketHub(config.DB)
 
@@ -383,6 +381,35 @@ func main() {
 		if ctx.Err() == nil {
 			log.Fatal(err)
 		}
+	}
+}
+
+// startDeferredCandleWarmup waits for a post-boot delay, then runs candle
+// cache warmup jobs sequentially in background. If shutdown begins before the
+// delay elapses, warmup is skipped.
+func startDeferredCandleWarmup(ctx context.Context, db *gorm.DB, delay time.Duration, builders ...*services.CandleBuilder) {
+	if len(builders) == 0 {
+		return
+	}
+
+	if delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+	}
+
+	for _, b := range builders {
+		if b == nil {
+			continue
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		b.WarmupFromDB(db)
 	}
 }
 
