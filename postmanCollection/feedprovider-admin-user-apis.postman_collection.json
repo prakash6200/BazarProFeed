@@ -182,6 +182,33 @@
         },
         {
           "name": "User Change Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  pm.collectionVariables.set('password', 'newpass123');",
+                  "  pm.sendRequest({",
+                  "    url: pm.collectionVariables.get('base_url') + '/auth/login',",
+                  "    method: 'POST',",
+                  "    header: { 'Content-Type': 'application/json' },",
+                  "    body: { mode: 'raw', raw: JSON.stringify({ username: pm.collectionVariables.get('username'), password: 'newpass123' }) }",
+                  "  }, function (err, res) {",
+                  "    if (!err && res && res.code === 200) {",
+                  "      let lr = res.json();",
+                  "      if (lr && lr.token) {",
+                  "        if (lr.token.jwt_token) pm.collectionVariables.set('jwt_token', lr.token.jwt_token);",
+                  "        if (lr.token.api_token) pm.collectionVariables.set('api_token', lr.token.api_token);",
+                  "      }",
+                  "    }",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "header": [
@@ -423,6 +450,24 @@
       "item": [
         {
           "name": "List Global Instruments",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let r = pm.response.json();",
+                  "let items = (r && r.instruments && Array.isArray(r.instruments)) ? r.instruments : [];",
+                  "if (items.length > 0 && items[0].id) pm.collectionVariables.set('global_instrument_id', items[0].id);",
+                  "if (items.length > 1 && items[1].id) {",
+                  "  pm.collectionVariables.set('global_instrument_id_2', items[1].id);",
+                  "} else if (items.length > 0 && items[0].id) {",
+                  "  pm.collectionVariables.set('global_instrument_id_2', items[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "GET",
             "header": [
@@ -436,12 +481,6 @@
                 { "key": "page", "value": "1" },
                 { "key": "limit", "value": "20" },
                 { "key": "include_deleted", "value": "false" },
-                { "key": "status", "value": "ACTIVE" },
-                { "key": "segment", "value": "FOREX" },
-                { "key": "exchange", "value": "FOREX" },
-                { "key": "instrument_type", "value": "SPOT" },
-                { "key": "search", "value": "GBP" },
-                { "key": "expiry", "value": "2026-05-26" },
                 { "key": "sort_by", "value": "symbol" },
                 { "key": "sort_order", "value": "asc" }
               ]
@@ -482,7 +521,10 @@
               "type": "text/javascript",
               "exec": [
                 "let r = pm.response.json();",
-                "if (r && r.global_instrument && r.global_instrument.id) pm.collectionVariables.set('global_instrument_id', r.global_instrument.id);"
+                  "if (r && r.global_instrument && r.global_instrument.id) {",
+                  "  pm.collectionVariables.set('global_instrument_id', r.global_instrument.id);",
+                  "  if (!pm.collectionVariables.get('global_instrument_id_2')) pm.collectionVariables.set('global_instrument_id_2', r.global_instrument.id);",
+                  "}"
               ]
             }
           }],
@@ -494,7 +536,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"instrument_token\": 101001,\n  \"exchange_token\": 501001,\n  \"tradingsymbol\": \"GBPUSD\",\n  \"name\": \"British Pound/USD\",\n  \"subscribe_symbol_name\": \"GBPUSD\",\n  \"symbol\": \"GBPUSD\",\n  \"last_price\": 1.2765,\n  \"expiry\": \"\",\n  \"tick_size\": 0.0001,\n  \"lot_size\": 1,\n  \"instrument_type\": \"SPOT\",\n  \"segment\": \"FOREX\",\n  \"exchange\": \"FOREX\",\n  \"strike\": 0,\n  \"status\": \"ACTIVE\"\n}"
+              "raw": "{\n  \"instrument_token\": 101001,\n  \"exchange_token\": 501001,\n  \"tradingsymbol\": \"GBPUSD_BULK\",\n  \"name\": \"British Pound/USD\",\n  \"subscribe_symbol_name\": \"GBPUSD_BULK\",\n  \"symbol\": \"GBPUSD_BULK\",\n  \"last_price\": 1.2765,\n  \"expiry\": \"\",\n  \"tick_size\": 0.0001,\n  \"lot_size\": 1,\n  \"instrument_type\": \"SPOT\",\n  \"segment\": \"FOREX\",\n  \"exchange\": \"FOREX\",\n  \"strike\": 0,\n  \"status\": \"ACTIVE\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/admin/global-instruments",
@@ -514,7 +556,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"instrument_token\": 101001,\n  \"exchange_token\": 501001,\n  \"tradingsymbol\": \"GBPUSD\",\n  \"name\": \"British Pound/USD\",\n  \"subscribe_symbol_name\": \"GBPUSD\",\n  \"symbol\": \"GBPUSD\",\n  \"last_price\": 1.278,\n  \"expiry\": \"\",\n  \"tick_size\": 0.0001,\n  \"lot_size\": 1,\n  \"instrument_type\": \"SPOT\",\n  \"segment\": \"FOREX\",\n  \"exchange\": \"FOREX\",\n  \"strike\": 0,\n  \"status\": \"INACTIVE\",\n  \"is_deleted\": true\n}"
+              "raw": "{\n  \"instrument_token\": 101001,\n  \"exchange_token\": 501001,\n  \"tradingsymbol\": \"GBPUSD_BULK\",\n  \"name\": \"British Pound/USD\",\n  \"subscribe_symbol_name\": \"GBPUSD_BULK\",\n  \"symbol\": \"GBPUSD_BULK\",\n  \"last_price\": 1.278,\n  \"expiry\": \"\",\n  \"tick_size\": 0.0001,\n  \"lot_size\": 1,\n  \"instrument_type\": \"SPOT\",\n  \"segment\": \"FOREX\",\n  \"exchange\": \"FOREX\",\n  \"strike\": 0,\n  \"status\": \"INACTIVE\",\n  \"is_deleted\": true\n}"
             },
             "url": {
               "raw": "{{base_url}}/admin/global-instruments/{{global_instrument_id}}",
@@ -525,7 +567,55 @@
           }
         },
         {
+          "name": "Bulk Update Global Instruments",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "let r = pm.response.json();",
+                  "pm.test('bulk update count present', function () {",
+                  "  pm.expect(r).to.have.property('updated_count');",
+                  "  pm.expect(r.updated_count).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{jwt_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"updates\": [\n    {\n      \"id\": \"{{global_instrument_id}}\",\n      \"instrument_token\": 101001,\n      \"exchange_token\": 501001,\n      \"tradingsymbol\": \"GBPUSD_BULK_A\",\n      \"name\": \"British Pound/USD - Bulk 1\",\n      \"subscribe_symbol_name\": \"GBPUSD_BULK_A\",\n      \"symbol\": \"GBPUSD_BULK_A\",\n      \"last_price\": 1.279,\n      \"expiry\": \"\",\n      \"tick_size\": 0.0001,\n      \"lot_size\": 1,\n      \"instrument_type\": \"SPOT\",\n      \"segment\": \"FOREX\",\n      \"exchange\": \"FOREX\",\n      \"strike\": 0,\n      \"status\": \"ACTIVE\",\n      \"is_deleted\": false\n    },\n    {\n      \"id\": \"{{global_instrument_id_2}}\",\n      \"instrument_token\": 101001,\n      \"exchange_token\": 501001,\n      \"tradingsymbol\": \"GBPUSD_BULK_B\",\n      \"name\": \"British Pound/USD - Bulk 2\",\n      \"subscribe_symbol_name\": \"GBPUSD_BULK_B\",\n      \"symbol\": \"GBPUSD_BULK_B\",\n      \"last_price\": 1.28,\n      \"expiry\": \"\",\n      \"tick_size\": 0.0001,\n      \"lot_size\": 1,\n      \"instrument_type\": \"SPOT\",\n      \"segment\": \"FOREX\",\n      \"exchange\": \"FOREX\",\n      \"strike\": 0,\n      \"status\": \"ACTIVE\",\n      \"is_deleted\": false\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/global-instruments/bulk",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "global-instruments", "bulk"]
+            },
+            "description": "Admin/Super-admin route. Bulk update global instruments in a single request.\nBehavior matches update-by-id API, but accepts updates[] with item-level id.\nValidation:\n- updates must be non-empty (max 500)\n- each updates[i].id must be UUID\n- each item must provide full global instrument fields similar to single update"
+          }
+        },
+        {
           "name": "Create User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let r = pm.response.json();",
+                  "if (r && r.user && r.user.id) pm.collectionVariables.set('admin_user_id', r.user.id);"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "header": [
@@ -540,7 +630,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"username\": \"demo_user\",\n  \"password\": \"Demo@123\",\n  \"role\": \"USER\"\n}"
+              "raw": "{\n  \"username\": \"demo_admin_{{$timestamp}}\",\n  \"password\": \"Demo@123\",\n  \"role\": \"ADMIN\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/admin/users",
@@ -591,14 +681,14 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/admin/users/{{user_id}}",
+              "raw": "{{base_url}}/admin/users/{{admin_user_id}}",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "admin",
                 "users",
-                "{{user_id}}"
+                "{{admin_user_id}}"
               ]
             },
             "description": "Admin/Super-admin route. Fetch user detail by UUID user_id (permission-based for ADMIN)."
@@ -624,14 +714,14 @@
               "raw": "{\n  \"is_active\": false\n}"
             },
             "url": {
-              "raw": "{{base_url}}/admin/users/{{user_id}}/status",
+              "raw": "{{base_url}}/admin/users/{{admin_user_id}}/status",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "admin",
                 "users",
-                "{{user_id}}",
+                "{{admin_user_id}}",
                 "status"
               ]
             },
@@ -650,14 +740,14 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/admin/users/{{user_id}}",
+              "raw": "{{base_url}}/admin/users/{{admin_user_id}}",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "admin",
                 "users",
-                "{{user_id}}"
+                "{{admin_user_id}}"
               ]
             },
             "description": "Delete user by user_id with role policy.\n- ADMIN cannot delete ADMIN/SUPER_ADMIN users\n- Cannot delete own account"
@@ -715,14 +805,14 @@
               "raw": "{\n  \"new_password\": \"NewPass@123\"\n}"
             },
             "url": {
-              "raw": "{{base_url}}/admin/users/{{user_id}}/password",
+              "raw": "{{base_url}}/admin/users/{{admin_user_id}}/password",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "admin",
                 "users",
-                "{{user_id}}",
+                "{{admin_user_id}}",
                 "password"
               ]
             },
@@ -738,8 +828,20 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.collectionVariables.set('jwt_token', '');",
-                  "pm.collectionVariables.set('api_token', '');"
+                  "pm.sendRequest({",
+                  "  url: pm.collectionVariables.get('base_url') + '/auth/login',",
+                  "  method: 'POST',",
+                  "  header: { 'Content-Type': 'application/json' },",
+                  "  body: { mode: 'raw', raw: JSON.stringify({ username: pm.collectionVariables.get('username'), password: pm.collectionVariables.get('password') }) }",
+                  "}, function (err, res) {",
+                  "  if (!err && res && res.code === 200) {",
+                  "    let lr = res.json();",
+                  "    if (lr && lr.token) {",
+                  "      if (lr.token.jwt_token) pm.collectionVariables.set('jwt_token', lr.token.jwt_token);",
+                  "      if (lr.token.api_token) pm.collectionVariables.set('api_token', lr.token.api_token);",
+                  "    }",
+                  "  }",
+                  "});"
                 ]
               }
             }
@@ -803,6 +905,24 @@
         },
         {
           "name": "Get Instruments (Paginated)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let r = pm.response.json();",
+                  "let items = (r && r.instruments && Array.isArray(r.instruments)) ? r.instruments : [];",
+                  "if (items.length > 0 && items[0].id) pm.collectionVariables.set('instrument_id', items[0].id);",
+                  "if (items.length > 1 && items[1].id) {",
+                  "  pm.collectionVariables.set('instrument_id_2', items[1].id);",
+                  "} else if (items.length > 0 && items[0].id) {",
+                  "  pm.collectionVariables.set('instrument_id_2', items[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "GET",
             "header": [
@@ -812,7 +932,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/admin/instruments?page=1&limit=20&include_deleted=false&instrument_type=PE&segment=NFO-OPT&exchange=CE-PE&status=ACTIVE&expiry=11-03-26&search=VBL&sort_by=instrument_token&sort_order=asc",
+              "raw": "{{base_url}}/admin/instruments?page=1&limit=20&include_deleted=false&sort_by=instrument_token&sort_order=asc",
               "host": [
                 "{{base_url}}"
               ],
@@ -832,30 +952,6 @@
                 {
                   "key": "include_deleted",
                   "value": "false"
-                },
-                {
-                  "key": "instrument_type",
-                  "value": "PE"
-                },
-                {
-                  "key": "segment",
-                  "value": "NFO-OPT"
-                },
-                {
-                  "key": "exchange",
-                  "value": "CE-PE"
-                },
-                {
-                  "key": "status",
-                  "value": "ACTIVE"
-                },
-                {
-                  "key": "expiry",
-                  "value": "11-03-26"
-                },
-                {
-                  "key": "search",
-                  "value": "VBL"
                 },
                 {
                   "key": "sort_by",
@@ -898,6 +994,21 @@
         },
         {
           "name": "Create Instrument",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let r = pm.response.json();",
+                  "if (r && r.instrument && r.instrument.id) {",
+                  "  pm.collectionVariables.set('instrument_id', r.instrument.id);",
+                  "  if (!pm.collectionVariables.get('instrument_id_2')) pm.collectionVariables.set('instrument_id_2', r.instrument.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "header": [
@@ -958,6 +1069,55 @@
               ]
             },
             "description": "Admin/Super-admin route. Update Zerodha instrument by UUID instrument_id.\nAt least one field required in body.\nAllowed enum values when provided:\n- instrument_type: CE, EQ, FUT, PE\n- segment: NFO-FUT, MCX-FUT, NFO-OPT, CDS-FUT, EQUITY\n- exchange: NSE, MCX, MCX-MINI, CE-PE, CDS, NSE-EQU\n- status: ACTIVE, INACTIVE"
+          },
+          "response": []
+        },
+        {
+          "name": "Bulk Update Instruments",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "let r = pm.response.json();",
+                  "pm.test('bulk update count present', function () {",
+                  "  pm.expect(r).to.have.property('updated_count');",
+                  "  pm.expect(r.updated_count).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"updates\": [\n    {\n      \"id\": \"{{instrument_id}}\",\n      \"name\": \"UPDATED DEMO INSTRUMENT BULK-1\",\n      \"status\": \"ACTIVE\"\n    },\n    {\n      \"id\": \"{{instrument_id_2}}\",\n      \"name\": \"UPDATED DEMO INSTRUMENT BULK-2\",\n      \"status\": \"INACTIVE\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/instruments/bulk",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "instruments",
+                "bulk"
+              ]
+            },
+            "description": "Admin/Super-admin route. Bulk update Zerodha instruments in one call.\nBehavior matches update-by-id API, but accepts updates[] with per-item id.\nValidation:\n- updates must be non-empty (max 500)\n- each updates[i].id must be UUID\n- each item must include at least one update field"
           },
           "response": []
         },
@@ -1236,7 +1396,17 @@
       "type": "string"
     },
     {
+      "key": "instrument_id_2",
+      "value": "",
+      "type": "string"
+    },
+    {
       "key": "global_instrument_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "global_instrument_id_2",
       "value": "",
       "type": "string"
     },

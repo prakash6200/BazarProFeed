@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -379,5 +380,130 @@ func (ctl *AdminGlobalInstrumentController) Update(c *fiber.Ctx) error {
 		"status_code":       fiber.StatusOK,
 		"message":           "global instrument updated successfully",
 		"global_instrument": instrument,
+	})
+}
+
+func (ctl *AdminGlobalInstrumentController) BulkUpdate(c *fiber.Ctx) error {
+	req := c.Locals("validated_bulk_global_update_request").(validator.BulkUpdateGlobalInstrumentsRequest)
+
+	tx := ctl.DB.Begin()
+	if tx.Error != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to start bulk update transaction",
+			"error":       "failed to start bulk update transaction",
+		})
+	}
+
+	updated := make([]models.GlobalInstrument, 0, len(req.Updates))
+	for i, item := range req.Updates {
+		expiry, err := parseGlobalInstrumentExpiry(item.Expiry)
+		if err != nil {
+			tx.Rollback()
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "expiry must be in dd-mm-yy format",
+				"error":       "updates[" + strconv.Itoa(i) + "].expiry must be in dd-mm-yy format",
+			})
+		}
+
+		incoming := models.GlobalInstrument{
+			InstrumentToken:     item.InstrumentToken,
+			ExchangeToken:       item.ExchangeToken,
+			TradingSymbol:       item.TradingSymbol,
+			Name:                item.Name,
+			SubscribeSymbolName: item.SubscribeSymbolName,
+			Symbol:              item.Symbol,
+			LastPrice:           item.LastPrice,
+			Expiry:              expiry,
+			TickSize:            item.TickSize,
+			LotSize:             item.LotSize,
+			InstrumentType:      item.InstrumentType,
+			Segment:             item.Segment,
+			Exchange:            item.Exchange,
+			Strike:              item.Strike,
+			Status:              item.Status,
+			IsDeleted:           item.IsDeleted,
+		}
+
+		if err := validator.ValidateGlobalInstrument(&incoming); err != nil {
+			tx.Rollback()
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     err.Error(),
+				"error":       "updates[" + strconv.Itoa(i) + "] " + err.Error(),
+			})
+		}
+
+		var instrument models.GlobalInstrument
+		if err := tx.First(&instrument, "id = ?", item.ID).Error; err != nil {
+			tx.Rollback()
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+					"status_code": fiber.StatusNotFound,
+					"message":     "global instrument not found",
+					"error":       "updates[" + strconv.Itoa(i) + "] global instrument not found",
+					"id":          item.ID,
+				})
+			}
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"status_code": fiber.StatusInternalServerError,
+				"message":     "failed to fetch global instrument",
+				"error":       "failed to fetch global instrument",
+			})
+		}
+
+		instrument.Name = incoming.Name
+		instrument.InstrumentToken = incoming.InstrumentToken
+		instrument.ExchangeToken = incoming.ExchangeToken
+		instrument.TradingSymbol = incoming.TradingSymbol
+		instrument.SubscribeSymbolName = incoming.SubscribeSymbolName
+		instrument.LastPrice = incoming.LastPrice
+		instrument.Expiry = incoming.Expiry
+		instrument.TickSize = incoming.TickSize
+		instrument.LotSize = incoming.LotSize
+		instrument.InstrumentType = incoming.InstrumentType
+		instrument.Segment = incoming.Segment
+		instrument.Exchange = incoming.Exchange
+		instrument.Strike = incoming.Strike
+		instrument.Symbol = incoming.Symbol
+		instrument.Status = incoming.Status
+		instrument.IsDeleted = incoming.IsDeleted
+
+		if err := tx.Save(&instrument).Error; err != nil {
+			tx.Rollback()
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"status_code": fiber.StatusInternalServerError,
+				"message":     "failed to update global instrument",
+				"error":       "updates[" + strconv.Itoa(i) + "] failed to update",
+				"id":          item.ID,
+			})
+		}
+
+		updated = append(updated, instrument)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		tx.Rollback()
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "failed to commit bulk update",
+			"error":       "failed to commit bulk update",
+		})
+	}
+
+	if err := ctl.refreshFeed(); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status_code": fiber.StatusInternalServerError,
+			"message":     "global instruments bulk updated but feed sync failed",
+			"error":       "global instruments bulk updated but feed sync failed",
+		})
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status_code":                fiber.StatusOK,
+		"message":                    "global instruments bulk updated successfully",
+		"updated_count":              len(updated),
+		"updated_global_instruments": updated,
 	})
 }

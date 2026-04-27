@@ -43,6 +43,15 @@ type UpdateInstrumentRequest struct {
 	Status          *string  `json:"status"`
 }
 
+type BulkUpdateInstrumentItem struct {
+	ID string `json:"id"`
+	UpdateInstrumentRequest
+}
+
+type BulkUpdateInstrumentsRequest struct {
+	Updates []BulkUpdateInstrumentItem `json:"updates"`
+}
+
 type ImportInstrumentsRequest struct {
 	FilePath string `json:"file_path"`
 }
@@ -321,6 +330,150 @@ func ValidateUpdateInstrument(c *fiber.Ctx) error {
 	}
 
 	c.Locals("validated_request", req)
+	return c.Next()
+}
+
+func ValidateBulkUpdateInstruments(c *fiber.Ctx) error {
+	var req BulkUpdateInstrumentsRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
+			"error":       "invalid request body",
+		})
+	}
+
+	if len(req.Updates) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "updates must contain at least one item",
+			"error":       "updates must contain at least one item",
+		})
+	}
+
+	if len(req.Updates) > 500 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "updates must contain at most 500 items",
+			"error":       "updates must contain at most 500 items",
+		})
+	}
+
+	for i := range req.Updates {
+		item := &req.Updates[i]
+		item.ID = strings.TrimSpace(item.ID)
+		if !instrumentIDPattern.MatchString(item.ID) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "updates[" + strconv.Itoa(i) + "].id must be a valid UUID",
+				"error":       "updates[" + strconv.Itoa(i) + "].id must be a valid UUID",
+			})
+		}
+
+		if item.TradingSymbol != nil {
+			trimmed := strings.TrimSpace(*item.TradingSymbol)
+			item.TradingSymbol = &trimmed
+		}
+
+		if item.Name != nil {
+			trimmed := strings.TrimSpace(*item.Name)
+			item.Name = &trimmed
+		}
+
+		if item.Expiry != nil {
+			trimmed := strings.TrimSpace(*item.Expiry)
+			item.Expiry = &trimmed
+		}
+
+		if item.InstrumentType != nil {
+			trimmed := strings.ToUpper(strings.TrimSpace(*item.InstrumentType))
+			if trimmed == "" || !isAllowedEnumValue(trimmed, allowedInstrumentTypes) {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"status_code": fiber.StatusBadRequest,
+					"message":     "updates[" + strconv.Itoa(i) + "].instrument_type must be one of: " + allowedEnumValues(allowedInstrumentTypes),
+					"error":       "updates[" + strconv.Itoa(i) + "].instrument_type must be one of: " + allowedEnumValues(allowedInstrumentTypes),
+				})
+			}
+			item.InstrumentType = &trimmed
+		}
+
+		if item.Segment != nil {
+			trimmed := strings.ToUpper(strings.TrimSpace(*item.Segment))
+			if trimmed == "" || !isAllowedEnumValue(trimmed, allowedSegments) {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"status_code": fiber.StatusBadRequest,
+					"message":     "updates[" + strconv.Itoa(i) + "].segment must be one of: " + allowedEnumValues(allowedSegments),
+					"error":       "updates[" + strconv.Itoa(i) + "].segment must be one of: " + allowedEnumValues(allowedSegments),
+				})
+			}
+			item.Segment = &trimmed
+		}
+
+		if item.Exchange != nil {
+			trimmed := strings.ToUpper(strings.TrimSpace(*item.Exchange))
+			if trimmed == "" || !isAllowedEnumValue(trimmed, allowedExchanges) {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"status_code": fiber.StatusBadRequest,
+					"message":     "updates[" + strconv.Itoa(i) + "].exchange must be one of: " + allowedEnumValues(allowedExchanges),
+					"error":       "updates[" + strconv.Itoa(i) + "].exchange must be one of: " + allowedEnumValues(allowedExchanges),
+				})
+			}
+			item.Exchange = &trimmed
+		}
+
+		if item.Status != nil {
+			trimmed := strings.ToUpper(strings.TrimSpace(*item.Status))
+			item.Status = &trimmed
+		}
+
+		hasAnyField := item.InstrumentToken != nil ||
+			item.ExchangeToken != nil ||
+			item.TradingSymbol != nil ||
+			item.Name != nil ||
+			item.LastPrice != nil ||
+			item.Expiry != nil ||
+			item.Strike != nil ||
+			item.TickSize != nil ||
+			item.LotSize != nil ||
+			item.InstrumentType != nil ||
+			item.Segment != nil ||
+			item.Exchange != nil ||
+			item.Status != nil
+
+		if !hasAnyField {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "updates[" + strconv.Itoa(i) + "] must contain at least one field to update",
+				"error":       "updates[" + strconv.Itoa(i) + "] must contain at least one field to update",
+			})
+		}
+
+		if item.InstrumentToken != nil && *item.InstrumentToken <= 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "updates[" + strconv.Itoa(i) + "].instrument_token must be greater than 0",
+				"error":       "updates[" + strconv.Itoa(i) + "].instrument_token must be greater than 0",
+			})
+		}
+
+		if item.ExchangeToken != nil && *item.ExchangeToken <= 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "updates[" + strconv.Itoa(i) + "].exchange_token must be greater than 0",
+				"error":       "updates[" + strconv.Itoa(i) + "].exchange_token must be greater than 0",
+			})
+		}
+
+		if item.Status != nil && *item.Status != "ACTIVE" && *item.Status != "INACTIVE" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "updates[" + strconv.Itoa(i) + "].status must be ACTIVE or INACTIVE",
+				"error":       "updates[" + strconv.Itoa(i) + "].status must be ACTIVE or INACTIVE",
+			})
+		}
+	}
+
+	c.Locals("validated_bulk_update_request", req)
 	return c.Next()
 }
 

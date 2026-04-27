@@ -14,5 +14,6 @@ func RegisterAdminGlobalInstrumentRoutes(app *fiber.App, globalInstrumentControl
 	adminRoutes.Get("/global-instruments", middleware.RequireAdminPermission(db, middleware.PermGlobalInstrumentsRead), validator.ValidateListGlobalInstrumentsQuery, globalInstrumentController.List)
 	adminRoutes.Post("/global-instruments/import", middleware.RequireAdminPermission(db, middleware.PermGlobalInstrumentsImport), validator.ValidateImportGlobalInstruments, globalInstrumentController.Import)
 	adminRoutes.Post("/global-instruments", middleware.RequireAdminPermission(db, middleware.PermGlobalInstrumentsCreate), globalInstrumentController.Create)
+	adminRoutes.Put("/global-instruments/bulk", middleware.RequireAdminPermission(db, middleware.PermGlobalInstrumentsUpdate), validator.ValidateBulkUpdateGlobalInstruments, globalInstrumentController.BulkUpdate)
 	adminRoutes.Put("/global-instruments/:id", middleware.RequireAdminPermission(db, middleware.PermGlobalInstrumentsUpdate), globalInstrumentController.Update)
 }

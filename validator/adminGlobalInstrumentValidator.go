@@ -4,6 +4,7 @@ import (
 	"errors"
 	"feedprovider/models"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +35,36 @@ var allowedGlobalInstrumentExchanges = map[string]struct{}{
 	models.GlobalInstrumentExchangeCrypto:    {},
 	models.GlobalInstrumentExchangeForex:     {},
 	models.GlobalInstrumentExchangeGift:      {},
+}
+
+var globalInstrumentIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
+
+type UpdateGlobalInstrumentRequest struct {
+	InstrumentToken     int64   `json:"instrument_token"`
+	ExchangeToken       int64   `json:"exchange_token"`
+	TradingSymbol       string  `json:"tradingsymbol"`
+	Name                string  `json:"name"`
+	SubscribeSymbolName string  `json:"subscribe_symbol_name"`
+	Symbol              string  `json:"symbol"`
+	LastPrice           float64 `json:"last_price"`
+	Expiry              string  `json:"expiry"`
+	TickSize            float64 `json:"tick_size"`
+	LotSize             int     `json:"lot_size"`
+	InstrumentType      string  `json:"instrument_type"`
+	Segment             string  `json:"segment"`
+	Exchange            string  `json:"exchange"`
+	Strike              float64 `json:"strike"`
+	Status              string  `json:"status"`
+	IsDeleted           bool    `json:"is_deleted"`
+}
+
+type BulkUpdateGlobalInstrumentItem struct {
+	ID string `json:"id"`
+	UpdateGlobalInstrumentRequest
+}
+
+type BulkUpdateGlobalInstrumentsRequest struct {
+	Updates []BulkUpdateGlobalInstrumentItem `json:"updates"`
 }
 
 func normalizeGlobalInstrumentStatus(value string) string {
@@ -321,5 +352,128 @@ func ValidateImportGlobalInstruments(c *fiber.Ctx) error {
 		})
 	}
 
+	return c.Next()
+}
+
+func ValidateBulkUpdateGlobalInstruments(c *fiber.Ctx) error {
+	var req BulkUpdateGlobalInstrumentsRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "invalid request body",
+			"error":       "invalid request body",
+		})
+	}
+
+	if len(req.Updates) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "updates must contain at least one item",
+			"error":       "updates must contain at least one item",
+		})
+	}
+
+	if len(req.Updates) > 500 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status_code": fiber.StatusBadRequest,
+			"message":     "updates must contain at most 500 items",
+			"error":       "updates must contain at most 500 items",
+		})
+	}
+
+	for i := range req.Updates {
+		item := &req.Updates[i]
+		item.ID = strings.TrimSpace(item.ID)
+		if !globalInstrumentIDPattern.MatchString(item.ID) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "updates[" + strconv.Itoa(i) + "].id must be a valid UUID",
+				"error":       "updates[" + strconv.Itoa(i) + "].id must be a valid UUID",
+			})
+		}
+
+		item.TradingSymbol = strings.TrimSpace(item.TradingSymbol)
+		item.Name = strings.TrimSpace(item.Name)
+		item.SubscribeSymbolName = strings.TrimSpace(item.SubscribeSymbolName)
+		item.Symbol = strings.TrimSpace(item.Symbol)
+		item.Expiry = strings.TrimSpace(item.Expiry)
+		item.InstrumentType = strings.TrimSpace(item.InstrumentType)
+		item.Segment = strings.TrimSpace(item.Segment)
+		item.Exchange = strings.TrimSpace(item.Exchange)
+		item.Status = strings.TrimSpace(item.Status)
+
+		if item.TradingSymbol == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "updates[" + strconv.Itoa(i) + "].tradingsymbol is required",
+				"error":       "updates[" + strconv.Itoa(i) + "].tradingsymbol is required",
+			})
+		}
+
+		if item.Status == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "updates[" + strconv.Itoa(i) + "].status is required",
+				"error":       "updates[" + strconv.Itoa(i) + "].status is required",
+			})
+		}
+
+		if item.InstrumentToken <= 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "updates[" + strconv.Itoa(i) + "].instrument_token must be greater than 0",
+				"error":       "updates[" + strconv.Itoa(i) + "].instrument_token must be greater than 0",
+			})
+		}
+
+		if item.ExchangeToken <= 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "updates[" + strconv.Itoa(i) + "].exchange_token must be greater than 0",
+				"error":       "updates[" + strconv.Itoa(i) + "].exchange_token must be greater than 0",
+			})
+		}
+
+		var expiry *time.Time
+		if item.Expiry != "" {
+			parsed, err := time.Parse("02-01-06", item.Expiry)
+			if err != nil {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"status_code": fiber.StatusBadRequest,
+					"message":     "updates[" + strconv.Itoa(i) + "].expiry must be in dd-mm-yy format",
+					"error":       "updates[" + strconv.Itoa(i) + "].expiry must be in dd-mm-yy format",
+				})
+			}
+			expiry = &parsed
+		}
+
+		inst := &models.GlobalInstrument{
+			InstrumentToken:     item.InstrumentToken,
+			ExchangeToken:       item.ExchangeToken,
+			TradingSymbol:       item.TradingSymbol,
+			Name:                item.Name,
+			SubscribeSymbolName: item.SubscribeSymbolName,
+			Symbol:              item.Symbol,
+			LastPrice:           item.LastPrice,
+			Expiry:              expiry,
+			TickSize:            item.TickSize,
+			LotSize:             item.LotSize,
+			InstrumentType:      item.InstrumentType,
+			Segment:             item.Segment,
+			Exchange:            item.Exchange,
+			Strike:              item.Strike,
+			Status:              item.Status,
+			IsDeleted:           item.IsDeleted,
+		}
+		if err := ValidateGlobalInstrument(inst); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status_code": fiber.StatusBadRequest,
+				"message":     "updates[" + strconv.Itoa(i) + "] " + err.Error(),
+				"error":       "updates[" + strconv.Itoa(i) + "] " + err.Error(),
+			})
+		}
+	}
+
+	c.Locals("validated_bulk_global_update_request", req)
 	return c.Next()
 }

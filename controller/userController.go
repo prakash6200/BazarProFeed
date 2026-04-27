@@ -568,13 +568,13 @@ func (uc *UserController) GetGlobalCandles(c *fiber.Ctx) error {
 		req.Page = 1
 	}
 	if req.SizePerPage <= 0 {
-		req.SizePerPage = 20
+		req.SizePerPage = 1000
 	}
-	if req.SizePerPage > 200 {
+	if req.SizePerPage > 1000 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
-			"message":     "sizePerPage must be less than or equal to 200",
-			"error":       "sizePerPage must be less than or equal to 200",
+			"message":     "sizePerPage must be less than or equal to 1000",
+			"error":       "sizePerPage must be less than or equal to 1000",
 		})
 	}
 
@@ -808,13 +808,13 @@ func (uc *UserController) GetZerodhaCandles(c *fiber.Ctx) error {
 		req.Page = 1
 	}
 	if req.SizePerPage <= 0 {
-		req.SizePerPage = 20
+		req.SizePerPage = 1000
 	}
-	if req.SizePerPage > 200 {
+	if req.SizePerPage > 1000 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status_code": fiber.StatusBadRequest,
-			"message":     "sizePerPage must be less than or equal to 200",
-			"error":       "sizePerPage must be less than or equal to 200",
+			"message":     "sizePerPage must be less than or equal to 1000",
+			"error":       "sizePerPage must be less than or equal to 1000",
 		})
 	}
 
